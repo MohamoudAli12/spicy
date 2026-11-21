@@ -1,0 +1,12 @@
+spicy
+spicy.exe
+*.pdb
+build/
+dist/
+# simulation output written beside the schematics
+examples/*.net
+examples/*.cir
+examples/*.raw
+examples/*.log
+examples/*.out
+examples/*.vacask/

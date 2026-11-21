@@ -1,0 +1,151 @@
+;; spicy settings (EDN). spicy reloads this file as soon as you save it.
+;; Delete the file to get the defaults back. A setting you leave out keeps its default,
+;; so this file can be as short as you like, e.g.  {:schematic {:grid-style :lines}}
+;;
+;; Colours are in themes.edn, keyboard shortcuts in shortcuts.edn, both in this folder.
+;; Values: numbers, true/false, "strings", :keywords, [vectors], nil.
+
+{
+ ;; ---------------------------------------------------------------- window and look
+ :ui
+ {:theme         nil         ; a theme name from themes.edn, e.g. "Light"; nil = the one picked in View > Theme
+  :scale         :auto       ; :auto (from the monitor) or a number, e.g. 1.5
+  :font          nil         ; path to a .ttf/.otf file; nil = a system sans font (DejaVu, Noto, …)
+  :mono-font     nil         ; font for netlists and logs; nil = a system monospace font
+  :font-size     14          ; base UI text size in pixels at 100 %
+  :layout        :waves-top  ; where the waveform pane goes: :waves-top :waves-bottom :waves-left :waves-right
+  :split         0.42        ; share of the window for the waveform pane (dragging the divider changes it for this session)
+  :show-waves    :after-run  ; :always, :after-run (when there is something to show) or :never (View > Waveforms toggles it)
+  :toolbar       true
+  :statusbar     true
+  :antialias     true        ; 4x MSAA for smooth lines (takes effect at the next start)
+  :fps           60          ; frame rate limit
+  :vsync         true
+  :confirm-close true        ; ask before closing a schematic with unsaved changes
+  :reopen-files  true        ; reopen the schematics that were open at the last exit
+  :tooltips      true
+  :tooltip-delay 0.5}        ; seconds
+
+ ;; ---------------------------------------------------------------- schematic editor
+ :schematic
+ {:grid                 16          ; grid step in schematic units (LTspice units: one grid = 16)
+  :embed-models         true        ; save copies of the models (.include files, imported, libraries) and
+                                    ; symbols a schematic uses in it, so the file simulates anywhere
+  :grid-style           :dots       ; :dots :lines :none
+  :grid-major           4           ; every n-th grid line is drawn stronger (:lines only)
+  :line-width           1.6         ; symbol lines at 100 % zoom (pixels)
+  :wire-width           2.0
+  :junction-radius      4.0         ; dot where three or more wires meet
+  :pin-radius           3.0         ; little squares on unconnected pins (0 = hide)
+  :text-size            14          ; component names and values at 100 % zoom
+  :show-refs            true        ; R1, C2 …
+  :show-values          true        ; 1k, 10u …
+  :zoom-speed           1.15        ; per mouse wheel notch
+  :zoom-min             0.1
+  :zoom-max             12.0
+  :initial-zoom         1.5
+  :wire-routing         :manhattan  ; :manhattan (two straight segments, Space flips the corner) or :direct
+  :cut-through-parts    true        ; a wire drawn through a part connects to its pins and does not short it
+  :auto-end-wire        true        ; a wire ends by itself when you click on a pin or another wire
+  :continue-placing     true        ; keep placing the same part after each click (Esc or right-click stops)
+  :rubber-band-wires    true        ; dragging parts drags the wires connected to them (Ctrl+drag detaches)
+  :fit-on-open          true
+  :hover-highlight      true        ; highlight the part, wire or net under the mouse
+  :highlight-net        true        ; while probing, the whole net under the mouse lights up
+  :show-op-values       true        ; after an operating point run, node voltages are shown on the wires
+  :pan-with-right-drag  false       ; pan with the right button too (middle button and Space+drag always pan)
+  :auto-name-nets       "N"         ; prefix of the names of unnamed nets in the netlist (N001 …)
+  :undo-levels          200}
+
+ ;; ---------------------------------------------------------------- waveform viewer
+ :waveform
+ {:line-width        1.8       ; trace thickness (pixels at 100 %)
+  :line-width-hover  3.0       ; the trace under the mouse or the selected trace
+  :grid              true
+  :grid-style        :dashed   ; :solid :dashed :dotted
+  :minor-grid        false
+  :font-size         12
+  :legend            :top      ; :top or :none (trace names above each pane)
+  :hover-readout     true      ; vertical line and value of the nearest trace under the mouse
+  :snap-to-trace     true      ; cursors and markers sit on the trace (else at the mouse height)
+  :cursor-readout    :box      ; :box (floating box in the pane corner) or :statusbar
+  :ac-display        :bode     ; :bode (magnitude in dB + phase), :magnitude, :db, :phase, :real-imag
+  :phase-dashed      true      ; phase traces dashed (Bode plots)
+  :phase-unwrap      true
+  :decimate          true      ; draw min/max per pixel column (very long traces stay fast)
+  :y-margin          0.06      ; empty space above and below the traces on autoscale
+  :zoom-speed        1.2
+  :marker-radius     4.5
+  :keep-traces       true      ; keep the probed traces when you run again
+  :new-pane-for      :voltages-and-currents ; :none, :voltages-and-currents (currents get their own pane), :each-trace
+  :pop-out-full-screen false   ; the waveform window (Ctrl+Shift+W) starts full screen
+  :double-click      :menu     ; double-click on a plot: :menu (marker / cursor 1 / cursor 2 / fit),
+                               ; :marker, :cursor (cursor 1, then 2) or :fit
+  :max-points-tooltip 7        ; at most this many traces listed in the hover tooltip
+  :dc-sweep-x-label  true
+  ;; FFT (right-click a transient trace › FFT). These are the defaults for a new spectrum
+  ;; pane; its right-click menu changes them for that pane.
+  :fft-window        :hann     ; :hann :hamming :blackman :flat-top (most accurate amplitudes) :rectangular
+  :fft-db            true      ; amplitude in dB (dBV, dBA) instead of linear
+  :fft-log-freq      true      ; logarithmic frequency axis
+  :fft-db-range      120       ; autoscale shows this many dB below the highest peak (0 = everything)
+  :fft-max-points    262144    ; largest FFT (rounded to a power of two, 1024 … 4194304)
+  :fft-range         :shown}   ; :shown (the time range zoomed to when the FFT is made) or :all (the whole run)
+
+ ;; ---------------------------------------------------------------- simulation
+ :simulation
+ {:simulator        :ngspice          ; a key of :simulators below
+  :output-dir       :beside-schematic ; :beside-schematic (name.net, name.raw, name.log next to the .edn),
+                                      ; :state-folder, or a folder path such as "/tmp/spicy"
+  :probe-after-run  true              ; after a run the mouse probes the schematic (Esc returns to editing)
+  :run-on-save      false             ; run again every time the schematic is saved
+  :default-models   true              ; add .model D D, NPN, PNP, NMOS, PMOS … when the netlist needs them
+  :model-libraries  []                ; .lib / .mod files .include'd in every netlist (models/standard.lib is always available)
+  :extra-lines      []                ; SPICE lines added to every netlist, e.g. [".options reltol=1e-4"]
+  :timeout          0}                ; seconds before a run is stopped, 0 = never
+
+ ;; Simulators. {netlist} {raw} {log} {dir} in :command are replaced by paths; the command runs
+ ;; in {dir} (the run folder). The command may be a full path, e.g. "/opt/vacask/bin/vacask".
+ ;;   :dialect   :spice (ngspice, Xyce, …) or :vacask (VACASK's own netlist language; spicy
+ ;;              translates parts, models, sources and .tran/.ac/.dc/.op/.param for it)
+ ;;   :raw       :single (one raw file, {raw}) or :per-analysis (every *.raw file in {dir})
+ ;;   :lines     extra lines for every netlist of this simulator
+ ;;   :voltage / :current / :pin-current / :source-current   the vector names in the raw file that
+ ;;              probing looks for: {net} is the net name, {ref} the part name (R1), {cur} the
+ ;;              current tag of the symbol or pin (see symbols/standard.edn), {pin} the pin name.
+ :simulators
+ {:ngspice {:name           "ngspice"
+            :dialect        :spice
+            :raw            :single
+            :command        ["ngspice" "-b" "-r" "{raw}" "-o" "{log}" "{netlist}"]
+            :lines          [".options savecurrents"]
+            :voltage        "v({net})"
+            :current        "i(@{ref}[i{cur}])"
+            :pin-current    "i(@{ref}[i{cur}])"
+            :source-current "i({ref})"}
+  :xyce    {:name           "Xyce"
+            :dialect        :spice
+            :raw            :single
+            :command        ["Xyce" "-r" "{raw}" "-l" "{log}" "{netlist}"]
+            :lines          []
+            :voltage        "V({net})"
+            :current        "I({ref})"
+            :pin-current    "I{cur}({ref})"
+            :source-current "I({ref})"}
+  ;; VACASK (https://codeberg.org/arpadbuermen/VACASK). Device currents are measured with
+  ;; 0 V sense sources that spicy adds in series with the pins (:sense-currents).
+  :vacask  {:name           "VACASK"
+            :dialect        :vacask
+            :raw            :per-analysis
+            :command        ["vacask" "-qp" "{netlist}"]
+            :lines          []
+            :sense-currents true
+            :voltage        "{net}"
+            :current        "vsns_{ref}_{pin}:flow(br)"
+            :pin-current    "vsns_{ref}_{pin}:flow(br)"
+            :source-current "{ref}:flow(br)"}}
+
+ ;; ---------------------------------------------------------------- libraries
+ :symbols
+ {:folders []}        ; extra folders with symbol .edn files (the data folder's symbols/ is always read)
+}

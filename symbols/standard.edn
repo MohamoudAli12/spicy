@@ -1,0 +1,263 @@
+;; spicy symbol library (EDN).
+;;
+;; spicy always has these symbols built in. Any .edn file in the symbols/ folder of the data
+;; folder (~/.local/share/spicy/symbols on Linux) or in a folder listed under
+;; :symbols {:folders […]} in settings.edn is read after them: a symbol with the same :name
+;; replaces the built-in one, a new name adds a part. Files are reloaded when they change.
+;;
+;; Coordinates are schematic units with y pointing down; one grid step is 16 units (as in
+;; LTspice), and pins must sit on the grid. The symbol's origin is where it is placed.
+;;
+;;   :name      unique id, used in schematic files            :desc  shown in the part picker
+;;   :category  group in the part picker                      :prefix  R → R1, R2 …
+;;   :key       keyboard key that starts placing it ("R", "Shift+Q"; nil = none).
+;;              shortcuts.edn can override it with :place/<name>.
+;;   :value     default value                                 :editor :source | :model | :text
+;;   :models    for :editor :model, the model types offered ["NPN"]
+;;   :pins      [{:name "A" :at [x y] :cur "c"} …]   :cur names the pin current for probing;
+;;              :element "L{ref}_P" makes the pin's current that SPICE element's (a winding)
+;;   :cur       current tag of a two-pin part (diode: "d" → ngspice i(@d1[id]))
+;;   :probe     :device (default), :source (current of a V source), :none
+;;   :spice     netlist line(s); {ref} {value} {<pin name>} {<attribute>} are filled in, and
+;;              {<field>} from a "field=…" word of the value ("Lp=1m Ls=1m k=0.99" → {Lp}).
+;;              {a|b}: field a if the value has it, else b
+;;   :defs      SPICE text added once to every netlist that uses the symbol (.subckt …)
+;;   :vacask    the same for VACASK netlists: {:line "…" :load ["spice/x.osdi"] :models ["model …"]
+;;              :defs "subckt … ends"}. {source} is the value turned into vsource/isource
+;;              parameters, {expr} a behavioural expression; numbers in {value} are written
+;;              in plain exponent form (VACASK reads "M" as mega, SPICE as milli).
+;;   :ref-at / :value-at   where the name and value are written (unrotated symbol)
+;;   :graphics  [:line x y x y …]   polyline           [:rect x0 y0 x1 y1]
+;;              [:circle cx cy r]     [:arc cx cy r from-deg to-deg]   (0° = right, 90° = down)
+;;              [:poly x y x y … :fill]   closed polygon (:fill fills it with the line colour,
+;;              :body with the symbol-fill colour)   [:text x y "+" :size 12]
+;;   :kind      :part (default), :ground, :label
+;;   :like      "nmos": start from that symbol (pins, graphics, netlist lines, models); the
+;;              keys given replace its values. Imported models use it (symbols/imported.edn).
+
+[
+ ;; ------------------------------------------------------------------ passives
+ {:name "res" :desc "Resistor" :category "Passive" :prefix "R" :key "R" :value "1k" :editor :text
+  :vacask {:line "{ref} ({A} {B}) spicy_r r={value}" :load ["spice/resistor.osdi"] :models ["model spicy_r sp_resistor"]}
+  :pins [{:name "A" :at [16 16]} {:name "B" :at [16 96]}]
+  :spice "{ref} {A} {B} {value}"
+  :ref-at [36 44] :value-at [36 70]
+  :graphics [[:line 16 16 16 28 4 32 28 40 4 48 28 56 4 64 28 72 4 80 16 84 16 96]]}
+
+ {:name "cap" :desc "Capacitor" :category "Passive" :prefix "C" :key "C" :value "1u" :editor :text
+  :vacask {:line "{ref} ({A} {B}) spicy_c c={value}" :load ["spice/capacitor.osdi"] :models ["model spicy_c sp_capacitor"]}
+  :pins [{:name "A" :at [16 0]} {:name "B" :at [16 64]}]
+  :spice "{ref} {A} {B} {value}"
+  :ref-at [36 22] :value-at [36 48]
+  :graphics [[:line 16 0 16 26] [:line 0 26 32 26] [:line 0 38 32 38] [:line 16 38 16 64]]}
+
+ {:name "polcap" :desc "Polarised capacitor" :category "Passive" :prefix "C" :key nil :value "100u" :editor :text
+  :vacask {:line "{ref} ({A} {B}) spicy_c c={value}" :load ["spice/capacitor.osdi"] :models ["model spicy_c sp_capacitor"]}
+  :pins [{:name "A" :at [16 0]} {:name "B" :at [16 64]}]
+  :spice "{ref} {A} {B} {value}"
+  :ref-at [36 22] :value-at [36 48]
+  :graphics [[:line 16 0 16 24] [:rect 0 24 32 28] [:arc 16 62 24 -138 -42] [:line 16 38 16 64]
+             [:line 2 12 10 12] [:line 6 8 6 16]]}
+
+ {:name "ind" :desc "Inductor" :category "Passive" :prefix "L" :key "L" :value "10u" :editor :text
+  :vacask {:line "{ref} ({A} {B}) spicy_l l={value}" :load ["spice/inductor.osdi"] :models ["model spicy_l sp_inductor"]}
+  :pins [{:name "A" :at [16 16]} {:name "B" :at [16 96]}]
+  :spice "{ref} {A} {B} {value}"
+  :ref-at [34 44] :value-at [34 70]
+  :graphics [[:line 16 16 16 24] [:arc 16 32 8 -90 90] [:arc 16 48 8 -90 90] [:arc 16 64 8 -90 90]
+             [:arc 16 80 8 -90 90] [:line 16 88 16 96]]}
+
+ ;; Transformers: one inductor per winding (Lp, Ls, Lt: the winding's own inductance, so the
+ ;; turns ratio is √(Ls/Lp)), coupled with k (1 = ideal; 0.99… leaves leakage inductance).
+ ;; The dots mark the winding ends of the same polarity. Winding resistance: a resistor in series.
+ {:name "xfmr" :desc "Transformer (2 windings)" :category "Passive" :prefix "T" :key "X"
+  :value "Lp=1m Ls=1m k=0.999" :editor :text
+  :vacask {:line "l{ref}_p ({P1} {P2}) spicy_l l={Lp}\nl{ref}_s ({S1} {S2}) spicy_l l={Ls}\nk{ref} () mutual k={k} ind1=\"l{ref}_p\" ind2=\"l{ref}_s\""
+           :load ["spice/inductor.osdi"] :models ["model spicy_l sp_inductor" "model mutual mutual"]}
+  :pins [{:name "P1" :at [0 0] :element "L{ref}_P"} {:name "P2" :at [0 96] :element "L{ref}_P"}
+         {:name "S1" :at [96 0] :element "L{ref}_S"} {:name "S2" :at [96 96] :element "L{ref}_S"}]
+  :spice "L{ref}_P {P1} {P2} {Lp}\nL{ref}_S {S1} {S2} {Ls}\nK{ref} L{ref}_P L{ref}_S {k}"
+  :ref-at [108 34] :value-at [108 58]
+  :graphics [[:line 0 0 32 0 32 16] [:arc 32 24 8 -90 90] [:arc 32 40 8 -90 90] [:arc 32 56 8 -90 90]
+             [:arc 32 72 8 -90 90] [:line 32 80 32 96 0 96]
+             [:line 45 10 45 86] [:line 51 10 51 86]
+             [:line 96 0 64 0 64 16] [:arc 64 24 8 90 270] [:arc 64 40 8 90 270] [:arc 64 56 8 90 270]
+             [:arc 64 72 8 90 270] [:line 64 80 64 96 96 96]
+             [:circle 21 16 3 :fill] [:circle 75 16 3 :fill]]}
+
+ {:name "xfmr3" :desc "Transformer (3 windings: reset, centre tap, auxiliary …)" :category "Passive" :prefix "T"
+  :key "Shift+X" :value "Lp=1m Ls=1m Lt=1m k=0.999" :editor :text
+  :vacask {:line "l{ref}_p ({P1} {P2}) spicy_l l={Lp}\nl{ref}_s ({S1} {S2}) spicy_l l={Ls}\nl{ref}_t ({T1} {T2}) spicy_l l={Lt}\nk{ref}_ps () mutual k={kps|k} ind1=\"l{ref}_p\" ind2=\"l{ref}_s\"\nk{ref}_pt () mutual k={kpt|k} ind1=\"l{ref}_p\" ind2=\"l{ref}_t\"\nk{ref}_st () mutual k={kst|k} ind1=\"l{ref}_s\" ind2=\"l{ref}_t\""
+           :load ["spice/inductor.osdi"] :models ["model spicy_l sp_inductor" "model mutual mutual"]}
+  :pins [{:name "P1" :at [0 64] :element "L{ref}_P"} {:name "P2" :at [0 160] :element "L{ref}_P"}
+         {:name "S1" :at [96 0] :element "L{ref}_S"} {:name "S2" :at [96 96] :element "L{ref}_S"}
+         {:name "T1" :at [96 128] :element "L{ref}_T"} {:name "T2" :at [96 224] :element "L{ref}_T"}]
+  ;; kps, kpt, kst (optional) set the coupling of one pair of windings; k is the rest
+  :spice "L{ref}_P {P1} {P2} {Lp}\nL{ref}_S {S1} {S2} {Ls}\nL{ref}_T {T1} {T2} {Lt}\nK{ref}_PS L{ref}_P L{ref}_S {kps|k}\nK{ref}_PT L{ref}_P L{ref}_T {kpt|k}\nK{ref}_ST L{ref}_S L{ref}_T {kst|k}"
+  :ref-at [108 34] :value-at [108 58]
+  :graphics [[:line 0 64 32 64 32 80] [:arc 32 88 8 -90 90] [:arc 32 104 8 -90 90] [:arc 32 120 8 -90 90]
+             [:arc 32 136 8 -90 90] [:line 32 144 32 160 0 160]
+             [:line 45 10 45 214] [:line 51 10 51 214]
+             [:line 96 0 64 0 64 16] [:arc 64 24 8 90 270] [:arc 64 40 8 90 270] [:arc 64 56 8 90 270]
+             [:arc 64 72 8 90 270] [:line 64 80 64 96 96 96]
+             [:line 96 128 64 128 64 144] [:arc 64 152 8 90 270] [:arc 64 168 8 90 270] [:arc 64 184 8 90 270]
+             [:arc 64 200 8 90 270] [:line 64 208 64 224 96 224]
+             [:circle 21 80 3 :fill] [:circle 75 16 3 :fill] [:circle 75 144 3 :fill]]}
+
+ ;; ------------------------------------------------------------------ diodes
+ {:name "diode" :desc "Diode" :category "Diodes" :prefix "D" :key "D" :value "D" :editor :model :models ["D"]
+  :cur "d"
+  :vacask {:line "{ref} ({A} {K}) {value}"}
+  :pins [{:name "A" :at [16 0]} {:name "K" :at [16 64]}]
+  :spice "{ref} {A} {K} {value}"
+  :ref-at [38 22] :value-at [38 46]
+  :graphics [[:line 16 0 16 18] [:poly 0 18 32 18 16 46 :fill] [:line 0 46 32 46] [:line 16 46 16 64]]}
+
+ {:name "zener" :desc "Zener diode" :category "Diodes" :prefix "D" :key "Z" :value "DZ" :editor :model :models ["D"]
+  :cur "d"
+  :vacask {:line "{ref} ({A} {K}) {value}"}
+  :pins [{:name "A" :at [16 0]} {:name "K" :at [16 64]}]
+  :spice "{ref} {A} {K} {value}"
+  :ref-at [38 22] :value-at [38 46]
+  :graphics [[:line 16 0 16 18] [:poly 0 18 32 18 16 46 :fill] [:line -4 40 0 46 32 46 36 52] [:line 16 46 16 64]]}
+
+ {:name "schottky" :desc "Schottky diode" :category "Diodes" :prefix "D" :key nil :value "DS" :editor :model :models ["D"]
+  :cur "d"
+  :vacask {:line "{ref} ({A} {K}) {value}"}
+  :pins [{:name "A" :at [16 0]} {:name "K" :at [16 64]}]
+  :spice "{ref} {A} {K} {value}"
+  :ref-at [38 22] :value-at [38 46]
+  :graphics [[:line 16 0 16 18] [:poly 0 18 32 18 16 46 :fill] [:line 4 40 0 40 0 46 32 46 32 52 28 52] [:line 16 46 16 64]]}
+
+ {:name "led" :desc "Light-emitting diode" :category "Diodes" :prefix "D" :key nil :value "LED" :editor :model :models ["D"]
+  :cur "d"
+  :vacask {:line "{ref} ({A} {K}) {value}"}
+  :pins [{:name "A" :at [16 0]} {:name "K" :at [16 64]}]
+  :spice "{ref} {A} {K} {value}"
+  :ref-at [44 22] :value-at [44 46]
+  :graphics [[:line 16 0 16 18] [:poly 0 18 32 18 16 46 :fill] [:line 0 46 32 46] [:line 16 46 16 64]
+             [:line 30 26 42 16] [:poly 42 16 36 17 41 22 :fill] [:line 34 34 46 24] [:poly 46 24 40 25 45 30 :fill]]}
+
+ ;; ------------------------------------------------------------------ sources
+ {:name "voltage" :desc "Voltage source (DC, pulse, sine, PWL, AC)" :category "Sources" :prefix "V" :key "V"
+  :value "5" :editor :source :probe :source
+  :vacask {:line "{ref} ({P} {N}) vsource {source}"}
+  :pins [{:name "P" :at [0 16]} {:name "N" :at [0 96]}]
+  :spice "{ref} {P} {N} {value}"
+  :ref-at [44 44] :value-at [44 70]
+  :graphics [[:line 0 16 0 20] [:circle 0 56 36] [:line 0 92 0 96]
+             [:line -7 38 7 38] [:line 0 31 0 45] [:line -7 74 7 74]]}
+
+ {:name "current" :desc "Current source (DC, pulse, sine, PWL, AC)" :category "Sources" :prefix "I" :key "I"
+  :value "1m" :editor :source :probe :device
+  :vacask {:line "{ref} ({P} {N}) isource {source}"}
+  :pins [{:name "P" :at [0 0]} {:name "N" :at [0 80]}]
+  :spice "{ref} {P} {N} {value}"
+  :ref-at [40 30] :value-at [40 56]
+  :graphics [[:line 0 0 0 8] [:circle 0 40 32] [:line 0 72 0 80]
+             [:line 0 22 0 52] [:poly -7 48 7 48 0 60 :fill]]}
+
+ {:name "bv" :desc "Behavioural voltage source  V=…" :category "Sources" :prefix "B" :key "B"
+  :value "V=V(in)*2" :editor :text :probe :device
+  :vacask {:line "{ref} ({P} {N}) {expr}"}
+  :pins [{:name "P" :at [0 16]} {:name "N" :at [0 96]}]
+  :spice "{ref} {P} {N} {value}"
+  :ref-at [44 44] :value-at [44 70]
+  :graphics [[:line 0 16 0 20] [:circle 0 56 36] [:line 0 92 0 96]
+             [:line -7 38 7 38] [:line 0 31 0 45] [:line -7 74 7 74] [:text -5 50 "B" :size 13]]}
+
+ {:name "bi" :desc "Behavioural current source  I=…" :category "Sources" :prefix "B" :key nil
+  :value "I=V(in)/1k" :editor :text :probe :device
+  :vacask {:line "{ref} ({P} {N}) {expr}"}
+  :pins [{:name "P" :at [0 0]} {:name "N" :at [0 80]}]
+  :spice "{ref} {P} {N} {value}"
+  :ref-at [40 30] :value-at [40 56]
+  :graphics [[:line 0 0 0 8] [:circle 0 40 32] [:line 0 72 0 80]
+             [:line 0 22 0 52] [:poly -7 48 7 48 0 60 :fill]]}
+
+ {:name "e" :desc "Voltage-controlled voltage source (E)" :category "Sources" :prefix "E" :key "E" :value "1" :editor :text
+  :vacask {:line "{ref} ({P} {N} {CP} {CN}) vcvs gain={value}"}
+  :pins [{:name "P" :at [0 16]} {:name "N" :at [0 96]} {:name "CP" :at [-48 32]} {:name "CN" :at [-48 80]}]
+  :spice "{ref} {P} {N} {CP} {CN} {value}"
+  :ref-at [40 44] :value-at [40 70]
+  :graphics [[:line 0 16 0 24] [:poly 0 24 32 56 0 88 -32 56 :body] [:line 0 88 0 96]
+             [:line -48 32 -24 32] [:line -48 80 -24 80] [:line -6 40 6 40] [:line 0 34 0 46] [:line -6 72 6 72]
+             [:text -42 16 "+" :size 11] [:text -42 84 "−" :size 11]]}
+
+ {:name "g" :desc "Voltage-controlled current source (G)" :category "Sources" :prefix "G" :key nil :value "1m" :editor :text
+  :vacask {:line "{ref} ({P} {N} {CP} {CN}) vccs gain={value}"}
+  :pins [{:name "P" :at [0 16]} {:name "N" :at [0 96]} {:name "CP" :at [-48 32]} {:name "CN" :at [-48 80]}]
+  :spice "{ref} {P} {N} {CP} {CN} {value}"
+  :ref-at [40 44] :value-at [40 70]
+  :graphics [[:line 0 16 0 24] [:poly 0 24 32 56 0 88 -32 56 :body] [:line 0 88 0 96]
+             [:line -48 32 -24 32] [:line -48 80 -24 80] [:line 0 40 0 68] [:poly -6 64 6 64 0 74 :fill]
+             [:text -42 16 "+" :size 11] [:text -42 84 "−" :size 11]]}
+
+ {:name "sw" :desc "Voltage-controlled switch (S)" :category "Sources" :prefix "S" :key "Shift+S" :value "SW"
+  :editor :model :models ["SW"]
+  :vacask {:line "{ref} ({P} {N} {CP} {CN}) {value}"}
+  :pins [{:name "P" :at [0 16]} {:name "N" :at [0 96]} {:name "CP" :at [-48 32]} {:name "CN" :at [-48 80]}]
+  :spice "{ref} {P} {N} {CP} {CN} {value}"
+  :ref-at [24 44] :value-at [24 70]
+  :graphics [[:line 0 16 0 34] [:circle 0 38 4] [:line 2 76 14 42] [:circle 0 76 4] [:line 0 80 0 96]
+             [:line -48 32 -28 32] [:line -48 80 -28 80] [:rect -32 28 -16 84 :body]
+             [:line -16 56 6 56] [:text -40 18 "+" :size 11] [:text -40 86 "−" :size 11]]}
+
+ ;; ------------------------------------------------------------------ transistors
+ {:name "npn" :desc "NPN bipolar transistor" :category "Transistors" :prefix "Q" :key "Q" :value "NPN"
+  :editor :model :models ["NPN"]
+  :vacask {:line "{ref} ({C} {B} {E}) {value}"}
+  :pins [{:name "C" :at [64 0] :cur "c"} {:name "B" :at [0 48] :cur "b"} {:name "E" :at [64 96] :cur "e"}]
+  :spice "{ref} {C} {B} {E} {value}"
+  :ref-at [72 40] :value-at [72 64]
+  :graphics [[:line 0 48 16 48] [:line 16 16 16 80] [:rect 14 16 18 80] [:line 16 34 64 10 64 0]
+             [:line 16 62 64 86 64 96] [:poly 58 83 45 82 50 72 :fill]]}
+
+ {:name "pnp" :desc "PNP bipolar transistor" :category "Transistors" :prefix "Q" :key "Shift+Q" :value "PNP"
+  :editor :model :models ["PNP"]
+  :vacask {:line "{ref} ({C} {B} {E}) {value}"}
+  :pins [{:name "C" :at [64 96] :cur "c"} {:name "B" :at [0 48] :cur "b"} {:name "E" :at [64 0] :cur "e"}]
+  :spice "{ref} {C} {B} {E} {value}"
+  :ref-at [72 40] :value-at [72 64]
+  :graphics [[:line 0 48 16 48] [:line 16 16 16 80] [:rect 14 16 18 80] [:line 16 34 64 10 64 0]
+             [:line 16 62 64 86 64 96] [:poly 22 31 35 31 30 21 :fill]]}
+
+ {:name "nmos" :desc "N-channel MOSFET" :category "Transistors" :prefix "M" :key "M" :value "NMOS"
+  :editor :model :models ["NMOS" "VDMOS"]
+  :vacask {:line "{ref} ({D} {G} {S} {S}) {value}"}
+  :pins [{:name "D" :at [48 0] :cur "d"} {:name "G" :at [0 80] :cur "g"} {:name "S" :at [48 96] :cur "s"}]
+  :spice "{ref} {D} {G} {S} {S} {value}"
+  :ref-at [60 40] :value-at [60 64]
+  :graphics [[:line 0 80 16 80] [:line 16 32 16 80] [:line 24 28 24 42] [:line 24 50 24 62] [:line 24 70 24 84]
+             [:line 24 36 48 36 48 0] [:line 24 76 48 76 48 96] [:line 24 56 48 56 48 76] [:poly 25 56 36 51 36 61 :fill]]}
+
+ {:name "pmos" :desc "P-channel MOSFET" :category "Transistors" :prefix "M" :key "Shift+M" :value "PMOS"
+  :editor :model :models ["PMOS" "VDMOS"]
+  :vacask {:line "{ref} ({D} {G} {S} {S}) {value}"}
+  :pins [{:name "D" :at [48 96] :cur "d"} {:name "G" :at [0 16] :cur "g"} {:name "S" :at [48 0] :cur "s"}]
+  :spice "{ref} {D} {G} {S} {S} {value}"
+  :ref-at [60 40] :value-at [60 64]
+  :graphics [[:line 0 16 16 16] [:line 16 16 16 64] [:line 24 12 24 26] [:line 24 34 24 46] [:line 24 54 24 68]
+             [:line 24 20 48 20 48 0] [:line 24 60 48 60 48 96] [:line 24 40 48 40 48 20] [:poly 37 40 26 35 26 45 :fill]]}
+
+ ;; ------------------------------------------------------------------ amplifiers
+ {:name "opamp" :desc "Op-amp (single pole, 100 dB, 10 MHz GBW)" :category "Amplifiers" :prefix "U" :key "U"
+  :value "spicy_opamp" :editor :text :probe :none
+  :vacask {:line "{ref} ({In+} {In-} {Out}) {value}" :load ["spice/resistor.osdi" "spice/capacitor.osdi"]
+           :models ["model spicy_r sp_resistor" "model spicy_c sp_capacitor" "model vccs vccs" "model vcvs vcvs"]
+           :defs "subckt spicy_opamp (inp inn out)\n  rin (inp inn) spicy_r r=10e6\n  g1 (0 int inp inn) vccs gain=1e-3\n  r1 (int 0) spicy_r r=100e6\n  c1 (int 0) spicy_c c=15.9e-12\n  e1 (out 0 int 0) vcvs gain=1\nends"}
+  :pins [{:name "In-" :at [-32 48]} {:name "In+" :at [-32 80]} {:name "Out" :at [32 64]}]
+  :spice "X{ref} {In+} {In-} {Out} {value}"
+  :ref-at [8 28] :value-at [8 104]
+  :defs ".subckt spicy_opamp inp inn out\nRin inp inn 10Meg\nG1 0 int inp inn 1m\nR1 int 0 100Meg\nC1 int 0 15.9p\nE1 out 0 int 0 1\n.ends spicy_opamp"
+  :graphics [[:poly -32 32 32 64 -32 96 :body] [:line -26 48 -18 48] [:line -26 80 -18 80] [:line -22 76 -22 84]]}
+
+ ;; ------------------------------------------------------------------ net flags (drawn by spicy)
+ {:name "ground" :desc "Ground (net 0)" :category "Nets" :kind :ground :key "G"
+  :pins [{:name "0" :at [0 0]}]
+  :graphics [[:line 0 0 0 0] [:line -16 0 16 0 0 16 -16 0]]}
+
+ {:name "label" :desc "Net label" :category "Nets" :kind :label :key nil
+  :pins [{:name "net" :at [0 0]}]
+  :graphics []}
+]

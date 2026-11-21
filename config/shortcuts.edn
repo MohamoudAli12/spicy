@@ -1,0 +1,91 @@
+;; spicy keyboard shortcuts (EDN). spicy reloads this file as soon as you save it.
+;; Delete the file to get the default keys back.
+;;
+;;   :action "Key"            one key
+;;   :action ["Key" "Key"]    several keys
+;;   :action nil              no key
+;;
+;; An action missing from this file keeps its built-in key. Keys:
+;;   A-Z 0-9 F1-F12 Esc Enter Tab Space Backspace Del Ins Home End PgUp PgDn Left Right Up Down
+;;   = - [ ] ; ' , . / \ Backquote Num0-Num9 Num+ Num- Num* Num/ Num. NumEnter
+;; Modifiers: Ctrl, Shift, Alt – e.g. "Ctrl+Shift+S" (Cmd works as Ctrl on macOS).
+;;
+;; [schematic] actions work while the mouse is over the schematic, [waves] over the waveform
+;; pane; the others everywhere. A key may do one thing in each place. Plain keys do nothing
+;; while you type in a text field.
+;;
+;; Placing parts: :place/<symbol name> starts placing that symbol, e.g. :place/res "R".
+;; Without an entry here, a symbol uses the :key from its symbol file.
+
+{
+ ;; ---- File
+ :file/new            "Ctrl+N"
+ :file/open           "Ctrl+O"
+ :file/import-model   nil              ; File › Import SPICE model…
+ :file/save           "Ctrl+S"
+ :file/save-as        "Ctrl+Shift+S"
+ :file/close          "Ctrl+W"
+ :file/export-netlist nil
+ :file/next-tab       "Ctrl+Tab"
+ :file/prev-tab       "Ctrl+Shift+Tab"
+ :file/quit           "Ctrl+Q"
+
+ ;; ---- Edit  [schematic]
+ :edit/undo           ["Ctrl+Z" "F9"]
+ :edit/redo           ["Ctrl+Y" "Ctrl+Shift+Z" "Shift+F9"]
+ :edit/cut            "Ctrl+X"
+ :edit/copy           "Ctrl+C"
+ :edit/paste          "Ctrl+V"
+ :edit/duplicate      "Ctrl+D"
+ :edit/delete         ["Del" "Backspace"]
+ :edit/select-all     "Ctrl+A"
+ :edit/rotate         "Ctrl+R"
+ :edit/mirror         "Ctrl+E"
+ :edit/properties     "Enter"          ; edit the selected part, label or text
+ :edit/cancel         "Esc"            ; stop placing / drawing, leave probe mode, deselect
+
+ ;; ---- Place  [schematic]
+ :place/wire          ["W" "F3"]
+ :place/label         ["N" "F4"]
+ :place/directive     ["S" "."]        ; SPICE directive (.tran, .param …)
+ :place/comment       "T"
+ :place/component     ["F2" "P"]       ; part picker
+ :place/flip-corner   "Space"          ; while drawing a wire: which way the corner goes
+
+ ;; ---- View
+ :view/fit            ["F" "Home"]     ; [schematic] and [waves]
+ :view/zoom-in        ["=" "Num+"]
+ :view/zoom-out       ["-" "Num-"]
+ :view/toggle-waves   "Ctrl+B"
+ :view/next-layout    "Ctrl+Shift+B"   ; waveforms top / right / bottom / left
+ :view/netlist        "Ctrl+Shift+N"
+ :view/log            "Ctrl+L"
+ :view/theme          nil
+
+ ;; ---- Simulate
+ :sim/run             ["F5" "Ctrl+Enter"]
+ :sim/stop            "Shift+F5"
+ :sim/edit-command    "F6"
+ :sim/probe           "Alt+P"          ; probe mode on / off
+ :sim/simulator       "F7"             ; choose ngspice / Xyce / VACASK …
+
+ ;; ---- Waveforms  [waves]
+ :wave/zoom-back      "Backspace"
+ :wave/delete-trace   "Del"
+ :wave/cursor1        "1"
+ :wave/cursor2        "2"
+ :wave/marker         "M"              ; marker on the nearest trace at the mouse
+ :wave/add-pane       "Ctrl+P"
+ :wave/clear          nil
+ :wave/export-csv     nil
+ :wave/next-plot      "Tab"            ; next analysis of the run (op, tran, ac …)
+ :wave/pop-out        "Ctrl+Shift+W"   ; waveforms in their own window (again: back into the main window)
+ :view/full-screen    "F11"            ; the window you are in; Esc also leaves full screen in the waveform window
+
+ ;; ---- Help
+ :help/shortcuts      "F1"
+ :help/settings       nil              ; opens settings.edn
+ :help/config-folder  nil
+ :help/diagnostics    nil
+ :help/about          nil
+}

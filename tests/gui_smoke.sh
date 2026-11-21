@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# GUI smoke test (Linux): opens an example, runs it with ngspice, probes two
+# signals and saves a screenshot, on a virtual display when xvfb-run exists.
+#
+#   tests/gui_smoke.sh [path/to/spicy]
+#   KEEP_SCREENSHOTS=1 keeps the work folder.
+set -u
+bin=${1:-./spicy}
+case "$bin" in /*) ;; *) bin="$PWD/$bin" ;; esac
+root=$(cd "$(dirname "$0")/.." && pwd)
+
+work=$(mktemp -d)
+[ -z "${KEEP_SCREENSHOTS:-}" ] && trap 'rm -rf "$work"' EXIT
+export SPICY_CONFIG_DIR="$work/cfg" SPICY_SCALE=1 SPICY_WINDOW=1400x900
+cp "$root/examples/rc_lowpass.edn" "$work/"
+
+run() { # screenshot name, actions
+	local xvfb=()
+	command -v xvfb-run >/dev/null 2>&1 && xvfb=(xvfb-run -a -s "-screen 0 1600x1000x24")
+	SPICY_ACTIONS="$2" SPICY_SCREENSHOT="$work/$1.png" timeout 120 "${xvfb[@]}" "$bin" "$work/rc_lowpass.edn" >>"$work/log.txt" 2>&1
+}
+
+run start ""
+if command -v ngspice >/dev/null 2>&1; then
+	run probed "sim/run;trace:V(out);trace:I(R1);wave/cursor1;wave/cursor2"
+	# the waveforms in their own window (screenshot popout-waves.png), then docked from inside it
+	run popout "sim/run;trace:V(out);wave/pop-out"
+	run docked "sim/run;trace:V(out);wave/pop-out;in-waves:wave/pop-out" || {
+		echo "FAIL: docking the waveform window from inside it (exit $?)"
+		tail -20 "$work/log.txt"
+		exit 1
+	}
+	# the spectrum of V(out) in a pane of its own
+	run fft "sim/run;trace:V(out);fft:V(out)"
+	# right-click on the plot: the menu with "FFT of V(out)", and in the spectrum pane its settings
+	run fftmenu "sim/run;trace:V(out);rclick:0.5,0.18"
+	run fftpanemenu "sim/run;trace:V(out);fft:V(out);rclick:0.5,0.36"
+	# double-click on the plot: the marker / cursor menu
+	run dblclick "sim/run;trace:V(out);dblclick:0.5,0.25"
+	shots="start probed popout popout-waves docked fft fftmenu fftpanemenu dblclick"
+else
+	echo "ngspice is not installed: no simulation screenshot"
+	shots="start"
+fi
+run picker "place/component"
+shots="$shots picker"
+
+for f in $shots; do
+	if [ ! -s "$work/$f.png" ]; then
+		echo "FAIL: no screenshot $f.png"
+		tail -20 "$work/log.txt"
+		exit 1
+	fi
+done
+echo "GUI smoke test passed (screenshots: $work)"

@@ -1,0 +1,152 @@
+# Tests and builds spicy on Linux, macOS and Windows.
+#
+#   every push / pull request: unit tests, build, command-line tests (with
+#   ngspice on Linux) and a GUI smoke test on Linux; the packaged binaries are
+#   kept as workflow artifacts.
+#   a pushed release tag (year-month, e.g. 2026-11 or 2026-11a): additionally
+#   publishes the binaries as a GitHub release; the tag is the version.
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["[0-9][0-9][0-9][0-9]-[0-9][0-9]*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  ODIN_RELEASE: dev-2026-09
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-24.04
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+          - name: macos-universal
+            os: macos-15
+          - name: windows-x86_64
+            os: windows-2025
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Odin
+        uses: laytan/setup-odin@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          release: ${{ env.ODIN_RELEASE }}
+
+      - name: Install Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libx11-dev xvfb xauth libgl1-mesa-dri fonts-dejavu-core ngspice
+
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Version and file names
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="dev-${GITHUB_SHA::7}"
+          fi
+          exe=""
+          [[ "$RUNNER_OS" == "Windows" ]] && exe=".exe"
+          {
+            echo "VERSION=$version"
+            echo "EXE=$exe"
+            echo "PKG=spicy-$version-${{ matrix.name }}"
+          } >> "$GITHUB_ENV"
+          odin version
+
+      - name: Unit tests
+        run: |
+          mkdir -p build
+          SPICY_CONFIG_DIR="$PWD/build/testcfg" odin test tests -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false -out:"build/spicy-tests$EXE"
+
+      - name: Build
+        if: runner.os != 'macOS'
+        run: odin build src -out:"spicy$EXE" -o:speed -define:SPICY_VERSION="v$VERSION"
+
+      - name: Build (macOS universal)
+        if: runner.os == 'macOS'
+        run: |
+          for arch in arm64 amd64; do
+            odin build src -out:"build/spicy-$arch" -o:speed -target:darwin_$arch -define:SPICY_VERSION="v$VERSION"
+          done
+          lipo -create -output spicy build/spicy-arm64 build/spicy-amd64
+          lipo -info spicy
+
+      - name: Command-line tests
+        run: tests/cli_test.sh "./spicy$EXE"
+
+      - name: GUI smoke test
+        if: runner.os == 'Linux'
+        run: tests/gui_smoke.sh ./spicy
+
+      - name: Package
+        run: |
+          mkdir -p "dist/$PKG"
+          # symbols, models and default settings are built into the binary
+          cp "spicy$EXE" README.md "dist/$PKG/"
+          cp -r examples "dist/$PKG/"
+          cd dist
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            7z a -tzip "$PKG.zip" "$PKG" > /dev/null
+          else
+            tar -czf "$PKG.tar.gz" "$PKG"
+          fi
+          rm -r "$PKG"
+          ls -l
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spicy-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: spicy-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --title "spicy $GITHUB_REF_NAME" --generate-notes

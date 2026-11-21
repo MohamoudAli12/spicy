@@ -1,0 +1,11 @@
+;; spicy schematic (EDN)
+{:spicy-schematic 1
+ :components [{:symbol "voltage" :ref "V1" :value "PULSE(0 1 0 1n 1n 5u 10u) AC 1" :at [0 0]}
+              {:symbol "res" :ref "R1" :value "1k" :at [288 0] :rot 90}
+              {:symbol "cap" :ref "C1" :value "1n" :at [256 16]}
+              {:symbol "diode" :ref "D1" :value "1N4148" :at [336 16]}]
+ :wires [[0 16 192 16] [272 16 352 16] [352 16 416 16] [0 96 0 128]
+         [272 80 272 128] [0 128 272 128] [352 80 352 128] [272 128 352 128]]
+ :flags [{:name "0" :at [0 128]}
+         {:name "out" :at [416 16]}]
+ :texts [{:at [0 176] :text ".ac dec 50 1k 100Meg" :directive true}]}

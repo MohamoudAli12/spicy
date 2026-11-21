@@ -1,0 +1,59 @@
+;; spicy themes (EDN). spicy reloads this file as soon as you save it.
+;; Delete the file to get the default themes back. Pick a theme in View > Theme, or set
+;; :ui {:theme "Name"} in settings.edn.
+;;
+;; Each theme is a map with a :name and three base colours:
+;;   :bg      panel background     :fg  text     :accent  highlights, focus, selection
+;; Every other colour is worked out from these three, and any of them can be set with
+;; the optional maps below. Colours are "#RRGGBB" or "#RRGGBBAA" (with alpha).
+;;
+;;   :ui         {:bg :panel :bar :fg :muted :accent :accent-fg :input :border :hover
+;;                :pressed :sel :warn :ok :err :popup :shadow}
+;;   :schematic  {:bg :grid :grid-major :wire :symbol :symbol-fill :pin :junction :ref :value
+;;                :text :directive :label :ground :select :hover :net-highlight :op-value
+;;                :select-box :placing}
+;;   :waveform   {:bg :plot :grid :axis :text :cursor1 :cursor2 :marker :hover :zoom-box
+;;                :readout :readout-border}
+;;   :traces     ["#RRGGBB" …]   colours given to new traces, in order
+;;
+;; The first theme is used when the chosen one is not found.
+
+[{:name "Dark" :bg "#26272B" :fg "#DCDDE0" :accent "#3D8BFF"
+  :schematic {:bg "#1C1D20" :grid "#3A3C42" :wire "#5AB0FF" :symbol "#E6E6E6" :symbol-fill "#2A2C31"
+              :ref "#9DA3AE" :value "#F2C46D" :directive "#7FD48B" :label "#FF9F5A" :ground "#E6E6E6"}
+  :waveform  {:bg "#1C1D20" :plot "#141518" :grid "#2E3036" :axis "#5A5E66"}
+  :traces    ["#4FC3F7" "#FF7043" "#9CCC65" "#FFD54F" "#BA68C8" "#4DB6AC" "#F06292" "#A1887F"
+              "#90A4AE" "#AED581" "#7986CB" "#FFB74D"]}
+
+ {:name "Light" :bg "#F0F0F2" :fg "#232428" :accent "#0A66D8"
+  :schematic {:bg "#FFFFFF" :grid "#C9CCD2" :wire "#1458C8" :symbol "#1E1E1E" :symbol-fill "#FAFAF7"
+              :ref "#5A6070" :value "#9A5B00" :directive "#1E7D32" :label "#C2410C" :ground "#1E1E1E"}
+  :waveform  {:bg "#FFFFFF" :plot "#FFFFFF" :grid "#E3E5EA" :axis "#9AA0AA"}
+  :traces    ["#0B6BD3" "#D84315" "#2E7D32" "#B8860B" "#7B1FA2" "#00838F" "#C2185B" "#5D4037"
+              "#455A64" "#558B2F" "#3949AB" "#EF6C00"]}
+
+ {:name "Classic" :bg "#E4E4E4" :fg "#1A1A1A" :accent "#2060C0"
+  :schematic {:bg "#F4F4EE" :grid "#9C9C9C" :wire "#2850D8" :symbol "#141414" :symbol-fill "#00000000"
+              :ref "#141414" :value "#141414" :directive "#000000" :text "#2850D8" :label "#141414"}
+  :waveform  {:bg "#E4E4E4" :plot "#000000" :grid "#3C3C3C" :axis "#8C8C8C" :text "#1A1A1A"
+              :cursor1 "#FFFFFF" :cursor2 "#FFFF60" :readout "#F4F4EE"}
+  :traces    ["#00FF00" "#4080FF" "#FF3030" "#FFFF00" "#00FFFF" "#FF40FF" "#FF9030" "#C0C0C0"
+              "#80FF80" "#8080FF" "#FF8080" "#FFFF80"]}
+
+ {:name "Oscilloscope" :bg "#202326" :fg "#D7DCE0" :accent "#22C55E"
+  :schematic {:bg "#121417" :grid "#2B3036" :wire "#38BDF8" :symbol "#D7DCE0" :value "#FACC15"}
+  :waveform  {:bg "#121417" :plot "#05080A" :grid "#1F2B24" :axis "#3E5A48" :text "#9FB8A8"
+              :cursor1 "#F8FAFC" :cursor2 "#FACC15"}
+  :traces    ["#FACC15" "#22D3EE" "#F472B6" "#4ADE80" "#FB923C" "#A78BFA" "#F87171" "#E2E8F0"]}
+
+ {:name "Nord" :bg "#2E3440" :fg "#D8DEE9" :accent "#88C0D0"
+  :schematic {:bg "#272C36" :grid "#3B4252" :wire "#81A1C1" :symbol "#ECEFF4" :value "#EBCB8B"
+              :directive "#A3BE8C" :label "#D08770"}
+  :waveform  {:plot "#242933" :grid "#3B4252"}
+  :traces    ["#88C0D0" "#BF616A" "#A3BE8C" "#EBCB8B" "#B48EAD" "#D08770" "#8FBCBB" "#5E81AC"]}
+
+ {:name "Solarized Light" :bg "#EEE8D5" :fg "#586E75" :accent "#268BD2"
+  :schematic {:bg "#FDF6E3" :grid "#D9D2BE" :wire "#268BD2" :symbol "#073642" :value "#B58900"
+              :directive "#859900" :label "#CB4B16"}
+  :waveform  {:plot "#FDF6E3" :grid "#E6DFCB"}
+  :traces    ["#268BD2" "#DC322F" "#859900" "#B58900" "#6C71C4" "#2AA198" "#D33682" "#CB4B16"]}]

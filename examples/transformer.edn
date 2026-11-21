@@ -1,0 +1,15 @@
+;; spicy schematic (EDN)
+;; A 1:2 transformer (Ls = 4·Lp) driving a 1k load from a 10 V, 1 kHz sine.
+;; Probe mode: click a winding's pin for its current, the part for the primary's.
+{:spicy-schematic 1
+ :components [{:symbol "voltage" :ref "V1" :value "SIN(0 10 1k)" :at [0 0]}
+              {:symbol "res" :ref "R1" :value "1" :at [128 0]}
+              {:symbol "xfmr" :ref "T1" :value "Lp=10m Ls=40m k=0.999" :at [320 0]}
+              {:symbol "res" :ref "RL" :value "1k" :at [704 0]}]
+ :wires [[0 16 144 16] [144 96 144 128] [144 128 272 128] [272 128 272 0] [272 0 320 0]
+         [320 96 320 160] [0 96 0 160] [0 160 320 160]
+         [416 0 720 0] [720 0 720 16] [416 96 416 160] [720 96 720 160] [416 160 720 160]]
+ :flags [{:name "0" :at [0 160]}
+         {:name "0" :at [416 160]}
+         {:name "out" :at [560 0]}]
+ :texts [{:at [0 224] :text ".tran 10u 3m" :directive true}]}

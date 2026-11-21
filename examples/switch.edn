@@ -1,0 +1,11 @@
+;; spicy schematic (EDN): voltage-controlled switch shorting the output while "ctl" is high
+{:spicy-schematic 1
+ :components [{:symbol "voltage" :ref "V1" :value "10" :at [0 0]}
+              {:symbol "res" :ref "R1" :value "1k" :at [192 0] :rot 90}
+              {:symbol "sw" :ref "S1" :value "SW" :at [320 0]}
+              {:symbol "voltage" :ref "V2" :value "PULSE(0 1 1u 10n 10n 2u 5u)" :at [176 128]}]
+ :wires [[0 16 96 16] [176 16 320 16] [320 16 384 16] [320 96 320 128] [0 96 0 128]
+         [176 144 224 144] [224 144 224 32] [224 32 272 32] [272 80 272 112]]
+ :flags [{:name "0" :at [0 128]} {:name "0" :at [320 128]} {:name "0" :at [272 112]} {:name "0" :at [176 224]}
+         {:name "out" :at [384 16]} {:name "ctl" :at [224 32]}]
+ :texts [{:at [0 272] :text ".tran 10u" :directive true}]}

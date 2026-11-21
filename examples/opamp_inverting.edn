@@ -1,0 +1,12 @@
+;; spicy schematic (EDN): inverting amplifier, gain -Rf/Rin = -10
+{:spicy-schematic 1
+ :components [{:symbol "voltage" :ref "V1" :value "SIN(0 0.1 1k) AC 1" :at [0 0]}
+              {:symbol "res" :ref "Rin" :value "1k" :at [208 0] :rot 90}
+              {:symbol "res" :ref "Rf" :value "10k" :at [336 -48] :rot 90}
+              {:symbol "opamp" :ref "U1" :value "spicy_opamp" :at [320 0]}]
+ :wires [[0 16 112 16] [192 16 240 16] [240 16 240 48] [240 48 288 48]
+         [240 16 240 -32] [320 -32 400 -32] [400 -32 400 64] [352 64 400 64] [400 64 432 64]
+         [288 80 288 128] [0 96 0 128]]
+ :flags [{:name "0" :at [0 128]} {:name "0" :at [288 128]}
+         {:name "in" :at [0 16]} {:name "out" :at [432 64]}]
+ :texts [{:at [0 192] :text ".tran 3m" :directive true}]}
