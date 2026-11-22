@@ -64,6 +64,7 @@ check "asc import result"    cat "$work/imp.edn" ":symbol \"res\""
 
 # a simulator's program set like Simulate › Simulators… does: only that path changes
 mkdir -p "$work/pcfg"
+export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"
 echo '{:schematic {:grid-style :lines}} ; mine' >"$work/pcfg/settings.edn"
 check "set program"          env SPICY_CONFIG_DIR="$work/pcfg" "$bin" --set-program vacask /opt/x/vacask "vacask runs /opt/x/vacask"
 check "set program kept"     cat "$work/pcfg/settings.edn" "; mine"
@@ -123,8 +124,11 @@ cat >"$work/fet.edn" <<'EOF'
          {:name "in" :at [616 16]} {:name "a" :at [616 96]} {:name "0" :at [616 160]}]
  :texts [{:at [0 320] :text ".op" :directive true} {:at [0 352] :text ".model MYD D(IS=1n N=2)" :directive true}]}
 EOF
+# the data folder is cfg/data on Linux, the config folder itself on macOS and Windows
 check "import model"         "$bin" --import-model "$work/fet.lib" "symbol   TFET"
-check "imported symbol"      cat "$work/cfg/data/symbols/imported.edn" ':like "nmos"'
+imported="$work/cfg/data/symbols/imported.edn"
+[ -f "$imported" ] || imported="$work/cfg/symbols/imported.edn"
+check "imported symbol"      cat "$imported" ':like "nmos"'
 check "config after import"  "$bin" --check-config "no problems"
 # an op-amp model: a triangle, and its building blocks (called only inside it) get no symbol
 cat > "$work/amp.lib" <<'EOF'
@@ -138,8 +142,8 @@ E1 Y COM A B 1e5
 .ends GAINX
 EOF
 check "import op-amp"        "$bin" --import-model "$work/amp.lib" "symbol   AMPX"
-check "op-amp symbol"        cat "$work/cfg/data/symbols/imported.edn" ':spice "X{ref} {In+} {In-} {V+} {V-} {Out} {value}"'
-if grep -q '"GAINX"' "$work/cfg/data/symbols/imported.edn"; then fail "no symbol for a building block"; else pass "no symbol for a building block"; fi
+check "op-amp symbol"        cat "$imported" ':spice "X{ref} {In+} {In-} {V+} {V-} {Out} {value}"'
+if grep -q '"GAINX"' "$imported"; then fail "no symbol for a building block"; else pass "no symbol for a building block"; fi
 printf '%s\n' '{:spicy-schematic 1 :components [{:symbol "AMPX" :ref "U1" :value "AMPX" :at [0 0]}]' \
 	' :texts [{:at [0 200] :text ".op" :directive true}]}' >"$work/ampx.edn"
 check "building block in netlist" "$bin" --netlist "$work/ampx.edn" ".subckt GAINX"
