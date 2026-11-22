@@ -10,6 +10,9 @@ case "$bin" in /*) ;; *) bin="$PWD/$bin" ;; esac
 root=$(cd "$(dirname "$0")/.." && pwd)
 
 work=$(mktemp -d)
+# Git Bash on Windows: use the folder's Windows name (C:/...), which both bash and the
+# Windows binary understand, so no path has to be converted between the two
+if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 trap 'rm -rf "$work"' EXIT
 export SPICY_CONFIG_DIR="$work/cfg"
 cp "$root"/examples/*.edn "$work/"
@@ -64,12 +67,13 @@ check "asc import result"    cat "$work/imp.edn" ":symbol \"res\""
 
 # a simulator's program set like Simulate › Simulators… does: only that path changes
 mkdir -p "$work/pcfg"
-export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*"
+# Git Bash would turn /opt/... into C:/Program Files/Git/opt/... for the Windows binary
+noconv=(MSYS_NO_PATHCONV=1 "MSYS2_ARG_CONV_EXCL=*")
 echo '{:schematic {:grid-style :lines}} ; mine' >"$work/pcfg/settings.edn"
-check "set program"          env SPICY_CONFIG_DIR="$work/pcfg" "$bin" --set-program vacask /opt/x/vacask "vacask runs /opt/x/vacask"
+check "set program"          env "${noconv[@]}" SPICY_CONFIG_DIR="$work/pcfg" "$bin" --set-program vacask /opt/x/vacask "vacask runs /opt/x/vacask"
 check "set program kept"     cat "$work/pcfg/settings.edn" "; mine"
 check "set program config"   env SPICY_CONFIG_DIR="$work/pcfg" "$bin" --check-config "no problems"
-env SPICY_CONFIG_DIR="$work/pcfg" "$bin" --set-program vacask /opt/y/vacask >/dev/null
+env "${noconv[@]}" SPICY_CONFIG_DIR="$work/pcfg" "$bin" --set-program vacask /opt/y/vacask >/dev/null
 check "set program again"    cat "$work/pcfg/settings.edn" '["/opt/y/vacask" "-qp" "{netlist}"]'
 
 # SPICE netlist opened as a schematic
