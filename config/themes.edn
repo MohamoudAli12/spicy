@@ -18,17 +18,17 @@
 ;;
 ;; The first theme is used when the chosen one is not found.
 
-[{:name "Dark" :bg "#26272B" :fg "#DCDDE0" :accent "#3D8BFF"
-  :schematic {:bg "#1C1D20" :grid "#3A3C42" :wire "#5AB0FF" :symbol "#E6E6E6" :symbol-fill "#2A2C31"
+[{:name "Dark" :bg "#282828" :fg "#DDDDDD" :accent "#2F86FF"
+  :schematic {:bg "#1E1F22" :grid "#3A3C40" :wire "#4FA8FF" :symbol "#E8E8E8" :symbol-fill "#2A2C31"
               :ref "#9DA3AE" :value "#F2C46D" :directive "#7FD48B" :label "#FF9F5A" :ground "#E6E6E6"}
-  :waveform  {:bg "#1C1D20" :plot "#141518" :grid "#2E3036" :axis "#5A5E66"}
+  :waveform  {:bg "#1E1F22" :plot "#1A1B1E" :grid "#33353A" :axis "#5A5E66"}
   :traces    ["#4FC3F7" "#FF7043" "#9CCC65" "#FFD54F" "#BA68C8" "#4DB6AC" "#F06292" "#A1887F"
               "#90A4AE" "#AED581" "#7986CB" "#FFB74D"]}
 
- {:name "Light" :bg "#F0F0F2" :fg "#232428" :accent "#0A66D8"
-  :schematic {:bg "#FFFFFF" :grid "#C9CCD2" :wire "#1458C8" :symbol "#1E1E1E" :symbol-fill "#FAFAF7"
+ {:name "Light" :bg "#ECECEC" :fg "#262626" :accent "#006EE6"
+  :schematic {:bg "#FAFAF8" :grid "#D8D8D4" :wire "#1A5FB4" :symbol "#181818" :symbol-fill "#FAFAF7"
               :ref "#5A6070" :value "#9A5B00" :directive "#1E7D32" :label "#C2410C" :ground "#1E1E1E"}
-  :waveform  {:bg "#FFFFFF" :plot "#FFFFFF" :grid "#E3E5EA" :axis "#9AA0AA"}
+  :waveform  {:bg "#FFFFFF" :plot "#FFFFFF" :grid "#E4E4E4" :axis "#9AA0AA"}
   :traces    ["#0B6BD3" "#D84315" "#2E7D32" "#B8860B" "#7B1FA2" "#00838F" "#C2185B" "#5D4037"
               "#455A64" "#558B2F" "#3949AB" "#EF6C00"]}
 
@@ -52,8 +52,27 @@
   :waveform  {:plot "#242933" :grid "#3B4252"}
   :traces    ["#88C0D0" "#BF616A" "#A3BE8C" "#EBCB8B" "#B48EAD" "#D08770" "#8FBCBB" "#5E81AC"]}
 
- {:name "Solarized Light" :bg "#EEE8D5" :fg "#586E75" :accent "#268BD2"
+ {:name "Solarized Light" :bg "#FDF6E3" :fg "#586E75" :accent "#268BD2"
   :schematic {:bg "#FDF6E3" :grid "#D9D2BE" :wire "#268BD2" :symbol "#073642" :value "#B58900"
               :directive "#859900" :label "#CB4B16"}
   :waveform  {:plot "#FDF6E3" :grid "#E6DFCB"}
-  :traces    ["#268BD2" "#DC322F" "#859900" "#B58900" "#6C71C4" "#2AA198" "#D33682" "#CB4B16"]}]
+  :traces    ["#268BD2" "#DC322F" "#859900" "#B58900" "#6C71C4" "#2AA198" "#D33682" "#CB4B16"]}
+
+ ;; the themes zapped and loomer also have (made from the three base colours)
+ {:name "Darcula" :bg "#3C3F41" :fg "#BBBBBB" :accent "#4A88C7"}
+ {:name "IntelliJ Light" :bg "#F2F2F2" :fg "#1E1E1E" :accent "#2675BF"}
+ {:name "macOS Dark" :bg "#1E1E1E" :fg "#DDDDDD" :accent "#0A84FF"}
+ {:name "macOS Light" :bg "#ECECEC" :fg "#262626" :accent "#007AFF"}
+ {:name "One Dark" :bg "#21252B" :fg "#ABB2BF" :accent "#61AFEF"}
+ {:name "Dracula" :bg "#282A36" :fg "#F8F8F2" :accent "#BD93F9"}
+ {:name "Solarized Dark" :bg "#002B36" :fg "#93A1A1" :accent "#268BD2"}
+ {:name "Gruvbox Dark" :bg "#282828" :fg "#EBDBB2" :accent "#458588"}
+ {:name "Gruvbox Light" :bg "#FBF1C7" :fg "#3C3836" :accent "#076678"}
+ {:name "Monokai Pro" :bg "#2D2A2E" :fg "#FCFCFA" :accent "#FFD866"}
+ {:name "GitHub Dark" :bg "#0D1117" :fg "#C9D1D9" :accent "#2F81F7"}
+ {:name "GitHub Light" :bg "#FFFFFF" :fg "#24292F" :accent "#0969DA"}
+ {:name "Arc Dark" :bg "#383C4A" :fg "#D3DAE3" :accent "#5294E2"}
+ {:name "Material Oceanic" :bg "#263238" :fg "#B0BEC5" :accent "#009688"}
+ {:name "Cyan Light" :bg "#E8F0F2" :fg "#1A2A30" :accent "#0F8FA8"}
+ {:name "Carbon" :bg "#161616" :fg "#F4F4F4" :accent "#78A9FF"}
+ {:name "High Contrast" :bg "#000000" :fg "#FFFFFF" :accent "#1AEBFF"}]

@@ -957,10 +957,12 @@ draw_sim_pick :: proc(d: ^Doc) {
 		st := cut_top(&in_, fs(0.9) + 6)
 		cut_left(&st, 80 * ui_scale)
 		if p, ok := find_program(dl.f[i]); ok {
-			draw_text(tcat("✓ ", p), st.x, st.y + 2, th.ok, fs(0.85))
+			draw_icon(.Check, st.x + fs(0.4), st.y + 2 + fs(0.85) / 2, fs(0.75), th.ok)
+			draw_text(p, st.x + fs(1.1), st.y + 2, th.ok, fs(0.85))
 		} else {
 			hint := "not found – give the full path or use Browse…" if len(dl.f[i]) > 0 else "no program set"
-			draw_text(tcat("✗ ", hint), st.x, st.y + 2, th.err, fs(0.85))
+			draw_icon(.Cross, st.x + fs(0.4), st.y + 2 + fs(0.85) / 2, fs(0.75), th.err)
+			draw_text(hint, st.x + fs(1.1), st.y + 2, th.err, fs(0.85))
 		}
 	}
 	draw_wrapped("The program is saved in settings.edn (:simulators … :command), which also holds the arguments and output names.", cut_top(&b, fs() * 2.5), th.muted, fs(0.9))

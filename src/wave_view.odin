@@ -833,12 +833,12 @@ draw_waves :: proc(d: ^Doc, r: Rect) {
 		stroke(plot, th.w_axis, 1)
 		// traces
 		push_clip(plot)
-		lw := S.w_line_width * ui_scale
+		lw := S.w_line_width // screen pixels, not scaled: thin clean traces as in zapped
 		for &t, ti in p.traces {
 			if t.hidden || t.y == nil do continue
 			col := rlc(trace_color(t.color))
 			wid := lw
-			if w.sel.pane == pi && w.sel.trace == ti do wid = S.w_line_hover * ui_scale
+			if w.sel.pane == pi && w.sel.trace == ti do wid = S.w_line_hover
 			pts := trace_points(w, t.y, plot, p.y0, p.y1)
 			if len(pts) >= 2 do rl.DrawSplineLinear(raw_data(pts), i32(len(pts)), wid, col)
 			else if len(pts) == 1 do rl.DrawCircleV(pts[0], wid, col)
@@ -991,7 +991,7 @@ draw_legend :: proc(w: ^Wave_View, pi: int, r: Rect, fsz: f32) {
 	x := r.x
 	for &t, ti in p.traces {
 		lab := t.expr
-		if len(t.err) > 0 do lab = tcat(t.expr, "  ⚠ ", t.err)
+		if len(t.err) > 0 do lab = tcat(t.expr, "  – ", t.err)
 		tw := text_w(lab, fsz) + 22
 		lr := Rect{x, r.y, tw, r.h}
 		col := trace_color(t.color)

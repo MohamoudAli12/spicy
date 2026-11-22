@@ -538,6 +538,31 @@ tool_set :: proc(d: ^Doc, t: Tool) {
 	if t != .Select do sch_select_all(d, false)
 }
 
+// Items of the View menu's submenus.
+view_submenu :: proc(label: string) -> []string {
+	items := make([dynamic]string, context.temp_allocator)
+	switch label {
+	case "Theme":
+		for t in themes do append(&items, tcat("✓ " if t.name == th.name else "   ", t.name))
+	case "UI scale":
+		cur := S.scale
+		append(&items, tcat("✓ " if cur <= 0 else "   ", fmt.tprintf("Automatic (%d %%)", int(math.round(default_ui_scale() * 100)))))
+		for x in MENU_SCALES do append(&items, tcat("✓ " if abs(cur - x) < 0.001 else "   ", fmt.tprintf("%d %%", int(math.round(x * 100)))))
+	}
+	return items[:]
+}
+
+MENU_SCALES := [?]f32{0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3}
+
+// UI scale from the View menu (0 = from the monitor); saved as :ui :scale in settings.edn.
+set_ui_scale :: proc(v: f32) {
+	S.scale = v
+	ui_scale = v if v > 0 else default_ui_scale()
+	for d in app.docs do wave_mark_dirty(&d.wave)
+	if err := settings_set("ui", "scale", ":auto" if v <= 0 else fmt.tprintf("%g", v)); len(err) > 0 do status(err, true)
+	else do status(fmt.tprintf("UI scale %d %%", int(math.round(ui_scale * 100))))
+}
+
 pick_theme :: proc(name: string) {
 	pref_put("theme", name)
 	prefs_save()
@@ -607,7 +632,7 @@ menu_items :: proc(name: string) -> []string {
 			k(tcat("✓ " if app.show_waves else "", "Waveforms"), "view/toggle-waves"), k("Move the waveforms", "view/next-layout"),
 			k(tcat("✓ " if waves_popped_out(d) else "", "Waveforms in their own window"), "wave/pop-out"), k("Full screen", "view/full-screen"), "-",
 			k("Netlist", "view/netlist"), k("Simulator log", "view/log"), "-", k("Appearance (scale, text size)…", "view/appearance"), "-")
-		for t in themes do append(&items, tcat("✓ " if t.name == th.name else "   ", "Theme: ", t.name))
+		append(&items, "Theme\t▸", "UI scale\t▸")
 	case "Simulate":
 		append(&items, k("Run", "sim/run"), k("Stop", "sim/stop") if d.run.state == .Running else tcat("~", k("Stop", "sim/stop")), k("Edit simulation command…", "sim/edit-command"), "-",
 			k(tcat("✓ " if d.tool == .Probe else "", "Probe"), "sim/probe"), "-")
@@ -629,6 +654,16 @@ menu_pick :: proc(name: string, idx: int) {
 	label, _ := menu_split(items[idx])
 	label = strings.trim_left(label, "✓ ~")
 	d := doc()
+	// submenus (View ▸ Theme, View ▸ UI scale)
+	if sub := ui.sub_result; sub >= 0 && (label == "Theme" || label == "UI scale") {
+		ui.sub_result = -1
+		if label == "Theme" {
+			if sub < len(themes) do pick_theme(themes[sub].name)
+		} else {
+			set_ui_scale(0 if sub == 0 else MENU_SCALES[sub - 1] if sub - 1 < len(MENU_SCALES) else S.scale)
+		}
+		return
+	}
 	switch {
 	case strings.has_prefix(label, "Recent: "):
 		rec := pref_list("recent")
@@ -640,9 +675,6 @@ menu_pick :: proc(name: string, idx: int) {
 			}
 		}
 		if k < len(rec) do open_file(rec[k])
-		return
-	case strings.has_prefix(label, "Theme: "):
-		pick_theme(label[len("Theme: "):])
 		return
 	case strings.has_prefix(label, "Simulator: "):
 		n := label[len("Simulator: "):]
@@ -724,11 +756,32 @@ draw_menubar :: proc(r: Rect) {
 		if idx := menu_result(id); idx >= 0 do menu_pick(m, idx)
 		x += w
 	}
+	// theme picker in the top-right corner, as in loomer
+	rr := r
+	if len(themes) > 0 && r.w > x + 260 * ui_scale {
+		names := make([dynamic]string, context.temp_allocator)
+		sel := 0
+		for t, i in themes {
+			append(&names, t.name)
+			if t.name == th.name do sel = i
+		}
+		cw: f32 = 0
+		for n in names do cw = max(cw, text_w(n))
+		cw = min(cw + 40, 220 * ui_scale)
+		cr := cut_right(&rr, cw + 6)
+		cr = {cr.x, r.y + 3, cw, r.h - 6}
+		// "Theme" before the box, as in loomer
+		lw := text_w("Theme") + 8
+		lr := cut_right(&rr, lw)
+		text_in({lr.x, r.y, lw, r.h}, "Theme", th.muted, 2, 0, 4)
+		if combo("menubar.theme", cr, names[:], &sel) do pick_theme(names[sel])
+		if hover(cr) do tooltip(id_of("menubar.theme"), "Theme (also in the View menu; themes.edn)")
+	}
 	// run state on the right
 	d := doc()
 	if d.run.state == .Running {
 		s := fmt.tprintf("%s running  %.1f s", d.run.sim_name, d.run.elapsed)
-		text_in(r, s, th.warn, 2, fs(0.9), 12)
+		text_in(rr, s, th.warn, 2, fs(0.9), 12)
 	}
 }
 
@@ -738,11 +791,11 @@ draw_toolbar :: proc(r: Rect) {
 	d := doc()
 	b := r_inset(r, 3)
 	h := b.h
-	tb :: proc(b: ^Rect, id, label, tip: string, enabled := true, selected := false, col: Color = {}) -> bool {
-		w := max(text_w(label) + 18, b.h)
+	tb :: proc(b: ^Rect, id, label, tip: string, enabled := true, selected := false, col: Color = {}, icon := Icon.None) -> bool {
+		w := max(text_w(label) + 18 + (fs(0.8) + (6 if len(label) > 0 else 0) if icon != .None else 0), b.h)
 		r := cut_left(b, w)
 		cut_left(b, 2)
-		return tool_button(id, r, label, enabled, selected, tip, col)
+		return tool_button(id, r, label, enabled, selected, tip, col, icon)
 	}
 	sep :: proc(b: ^Rect) {
 		r := cut_left(b, 10)
@@ -760,13 +813,16 @@ draw_toolbar :: proc(r: Rect) {
 	if tb(&b, "tb.redo", "Redo", ks("Redo", "edit/redo"), len(d.redo) > 0) do run_action("edit/redo")
 	sep(&b)
 	if tb(&b, "tb.wire", "Wire", ks("Draw wires", "place/wire"), true, d.tool == .Wire) do run_action("place/wire")
-	if tb(&b, "tb.gnd", "Gnd", ks("Ground", "place/ground"), true, d.tool == .Place && d.place_kind == .Ground) do run_action("place/ground")
+	if tb(&b, "tb.gnd", "Ground", ks("Ground", "place/ground"), true, d.tool == .Place && d.place_kind == .Ground) do run_action("place/ground")
 	if tb(&b, "tb.label", "Label", ks("Net label", "place/label"), true, d.tool == .Place && d.place_kind == .Label) do run_action("place/label")
 	quick := [?]string{"res", "cap", "ind", "diode", "voltage"}
 	for q in quick {
 		sym := symbol_find(q)
 		if sym == nil do continue
-		if tb(&b, tcat("tb.", q), sym.prefix, ks(sym.desc, tcat("place/", q)), true, d.tool == .Place && d.place_kind == .Part && d.place_sym == q) do place_symbol(d, sym)
+		// the full name ("Resistor", "Voltage source"), as zapped shows its parts
+		name := sym.desc
+		if i := strings.index(name, " ("); i > 0 do name = name[:i]
+		if tb(&b, tcat("tb.", q), name, ks(sym.desc, tcat("place/", q)), true, d.tool == .Place && d.place_kind == .Part && d.place_sym == q) do place_symbol(d, sym)
 	}
 	if tb(&b, "tb.parts", "Parts…", ks("Part picker", "place/component")) do run_action("place/component")
 	if tb(&b, "tb.dir", ".op", ks("SPICE directive", "place/directive")) do run_action("place/directive")
@@ -803,14 +859,14 @@ draw_toolbar :: proc(r: Rect) {
 			missing = !found
 		}
 		tip := tcat(cur.name, ": program not found – set its path here") if missing && cur != nil else "Simulators and their programs"
-		if tb(&b, "tb.simset", "⚠" if missing else "…", ks(tip, "sim/simulator"), true, false) do run_action("sim/simulator")
+		if tb(&b, "tb.simset", "" if missing else "…", ks(tip, "sim/simulator"), true, false, th.warn if missing else {}, .Warn if missing else .None) do run_action("sim/simulator")
 	}
 	// run / stop, after the simulator it runs
 	cut_left(&b, 4)
 	if d.run.state == .Running {
-		if tb(&b, "tb.stop", "■ Stop", ks("Stop the simulation", "sim/stop"), true, false, th.err) do run_action("sim/stop")
+		if tb(&b, "tb.stop", "Stop", ks("Stop the simulation", "sim/stop"), true, false, th.err, .Stop) do run_action("sim/stop")
 	} else {
-		if tb(&b, "tb.run", "▶ Run", ks("Run the simulation", "sim/run"), true, false, th.ok) do run_action("sim/run")
+		if tb(&b, "tb.run", "Run", ks("Run the simulation", "sim/run"), true, false, th.ok, .Play) do run_action("sim/run")
 	}
 }
 
@@ -873,9 +929,15 @@ draw_statusbar :: proc(r: Rect) {
 	right := ""
 	if sim := doc_sim(d); sim != nil do right = sim.name
 	if d.run.state == .Done do right = tcat(right, "  ·  ", d.run.message)
+	// the version in the lower-right corner, as in loomer
+	ver := tcat("spicy ", SPICY_VERSION)
+	vw := text_w(ver, fs(0.9)) + 20
+	text_in(r, ver, th.muted, 2, fs(0.9), 10)
+	line(r.x + r.w - vw, r.y + 4, r.x + r.w - vw, r.y + r.h - 4, th.border)
+	rr := Rect{r.x, r.y, r.w - vw, r.h}
 	rw := text_w(right, fs(0.9)) + 20
-	text_in({r.x, r.y, r.w - rw, r.h}, fit_text(msg, r.w - rw - 20, fs(0.9)), col, 0, fs(0.9), 10)
-	text_in(r, right, th.muted, 2, fs(0.9), 10)
+	text_in({r.x, r.y, rr.w - rw, r.h}, fit_text(msg, rr.w - rw - 20, fs(0.9)), col, 0, fs(0.9), 10)
+	text_in(rr, right, th.muted, 2, fs(0.9), 10)
 }
 
 // Split the main area between the schematic and the waveforms.
@@ -892,6 +954,46 @@ draw_main :: proc(r: Rect) {
 	if popped do has_waves = false // they are in their own window
 	sr, wr := r, Rect{}
 	div: Rect
+	vert_layout := app.layout == "waves-left" || app.layout == "waves-right"
+	collapse_btn: Rect
+	collapse_hot: bool
+	collapse_glyph: Icon
+	// collapsed waveform pane: a thin strip on its side that opens it again (as loomer's panes)
+	if !has_waves && !popped && !app.show_waves && len(d.run.plots) > 0 {
+		t := fs() + 8
+		strip: Rect
+		switch app.layout {
+		case "waves-bottom": strip = cut_bottom(&sr, t)
+		case "waves-left": strip = cut_left(&sr, t)
+		case "waves-right": strip = cut_right(&sr, t)
+		case: strip = cut_top(&sr, t)
+		}
+		hv := hover(strip)
+		fill(strip, th.hover if hv else th.bar)
+		stroke(strip, th.border)
+		icon: Icon
+		switch app.layout {
+		case "waves-bottom": icon = .Up
+		case "waves-left": icon = .Right
+		case "waves-right": icon = .Left
+		case: icon = .Down
+		}
+		if vert_layout do draw_icon(icon, strip.x + strip.w / 2, strip.y + strip.h / 2, fs(0.7), th.muted)
+		else {
+			lw := text_w("Waveforms", fs(0.9))
+			x := strip.x + (strip.w - lw - fs()) / 2
+			draw_icon(icon, x + fs(0.35), strip.y + strip.h / 2, fs(0.7), th.muted)
+			draw_text("Waveforms", x + fs(), strip.y + (strip.h - fs(0.9)) / 2, th.muted, fs(0.9))
+		}
+		if hv {
+			ui.cursor = .POINTING_HAND
+			tooltip(id_of("waves.strip"), "Show the waveforms")
+			if ui.pressed[0] {
+				ui.pressed[0] = false
+				run_action("view/toggle-waves")
+			}
+		}
+	}
 	if has_waves {
 		k := app.split
 		switch app.layout {
@@ -916,8 +1018,35 @@ draw_main :: proc(r: Rect) {
 			div = {r.x, r.y + h, r.w, 4}
 			sr = {r.x, div.y + 4, r.w, r.h - h - 4}
 		}
-		vertical := app.layout == "waves-left" || app.layout == "waves-right"
+		vertical := vert_layout
 		fill(div, th.border)
+		// a collapse button in the middle of the divider
+		{
+			bs := fs() + 4
+			cb := Rect{div.x + div.w / 2 - bs / 2, div.y + div.h / 2 - bs / 2, bs, bs}
+			if vertical do cb.h = bs * 1.6
+			else do cb.w = bs * 1.6
+			if vertical do cb.y = div.y + div.h / 2 - cb.h / 2
+			else do cb.x = div.x + div.w / 2 - cb.w / 2
+			chv := hover(cb)
+			collapse_btn, collapse_hot = cb, chv
+			glyph: Icon
+			switch app.layout {
+			case "waves-bottom": glyph = .Down
+			case "waves-left": glyph = .Left
+			case "waves-right": glyph = .Right
+			case: glyph = .Up
+			}
+			collapse_glyph = glyph
+			if chv {
+				ui.cursor = .POINTING_HAND
+				tooltip(id_of("waves.collapse"), "Hide the waveforms")
+				if ui.pressed[0] {
+					ui.pressed[0] = false
+					run_action("view/toggle-waves")
+				}
+			}
+		}
 		if hover({div.x - 2, div.y - 2, div.w + 4, div.h + 4}) {
 			ui.cursor = .RESIZE_EW if vertical else .RESIZE_NS
 			if ui.pressed[0] do app.split_drag = true
@@ -942,6 +1071,11 @@ draw_main :: proc(r: Rect) {
 	}
 	draw_schematic(d, sr)
 	if has_waves do draw_waves(d, wr)
+	if collapse_btn.w > 0 {
+		fill_round(collapse_btn, th.accent if collapse_hot else th.bar, 4)
+		stroke_round(collapse_btn, th.border, 4)
+		draw_icon(collapse_glyph, collapse_btn.x + collapse_btn.w / 2, collapse_btn.y + collapse_btn.h / 2, fs(0.6), th.accent_fg if collapse_hot else th.muted)
+	}
 }
 
 // UI scale from the monitor: the larger of resolution/1080p and DPI/112 (as in zapped).
@@ -996,6 +1130,7 @@ gui_main :: proc(files: []string) {
 	idle_init(len(os.get_env("SPICY_SCREENSHOT", context.temp_allocator)) == 0 && len(os.get_env("SPICY_ACTIONS", context.temp_allocator)) == 0)
 	if pref_bool("maximized") do rl.MaximizeWindow()
 	ui_scale = S.scale if S.scale > 0 else default_ui_scale()
+	ui.submenu_fn = view_submenu
 	fonts_init()
 	app.show_waves = pref_bool("show-waves", true)
 	// a copy: the prefs and settings strings are freed when they change

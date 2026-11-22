@@ -59,8 +59,8 @@
 
  ;; ---------------------------------------------------------------- waveform viewer
  :waveform
- {:line-width        1.8       ; trace thickness (pixels at 100 %)
-  :line-width-hover  3.0       ; the trace under the mouse or the selected trace
+ {:line-width        1.5       ; trace thickness in screen pixels (thin, as in zapped)
+  :line-width-hover  2.5       ; the trace under the mouse or the selected trace
   :grid              true
   :grid-style        :dashed   ; :solid :dashed :dotted
   :minor-grid        false

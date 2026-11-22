@@ -296,7 +296,9 @@ UI_State :: struct {
 	focus:        u64,
 	edit_buf:     [dynamic]u8,
 	edit_cur:     int,
-	edit_sel_all: bool,
+	edit_sel_all: bool, // select everything (turned into the anchor below)
+	edit_anchor:  int, // the other end of the selection; -1 = none
+	edit_drag:    bool, // the mouse is selecting text in the focused field
 	edit_scroll:  f32,
 	popup_id:     u64,
 	popup_rect:   Rect,
@@ -314,6 +316,14 @@ UI_State :: struct {
 	cursor:       rl.MouseCursor,
 	scroll:       map[u64]f32,
 	focus_next:   u64, // give this field focus on its next frame
+	// submenus: an item whose shortcut is "▸" opens the items submenu_fn gives for its label
+	submenu_fn:   proc(label: string) -> []string,
+	sub_open:     int, // the parent item whose submenu is open; -1 = none
+	sub_items:    [dynamic]string,
+	sub_rect:     Rect,
+	sub_result:   int, // the submenu item picked (menu_result gives the parent item)
+	sb_drag:      u64, // the scroll area whose scrollbar thumb is being dragged
+	sb_grab:      f32, // where in the thumb it was grabbed
 }
 
 ui: UI_State
@@ -383,7 +393,7 @@ ui_begin_frame :: proc() {
 		if c == 0 do break
 		append(&ui.chars, c)
 	}
-	ui.block = ui.popup_id != 0 && r_contains(ui.popup_rect, ui.mouse)
+	ui.block = ui.popup_id != 0 && (r_contains(ui.popup_rect, ui.mouse) || (ui.sub_open >= 0 && r_contains(ui.sub_rect, ui.mouse)))
 	ui.hot = 0
 	ui.cursor = .DEFAULT
 	if !ui.down[0] && !ui.released[0] do ui.active = 0
@@ -445,7 +455,54 @@ button :: proc(id_s: string, r: Rect, text: string, enabled := true, primary := 
 	return h && ui.released[0] && ui.active == id
 }
 
-tool_button :: proc(id_s: string, r: Rect, text: string, enabled := true, selected := false, tip := "", col: Color = {}) -> bool {
+// Icons drawn as shapes, not font characters: fonts lack many symbols (Segoe UI on Windows
+// has no ▶ ⚠ ✓), and raylib draws a missing character as "?".
+Icon :: enum {None, Play, Stop, Warn, Check, Cross, Up, Down, Left, Right}
+
+// Draws an icon centred on (cx, cy), about s pixels tall.
+draw_icon :: proc(icon: Icon, cx, cy, s: f32, col: Color) {
+	c := rlc(col)
+	h := s / 2
+	switch icon {
+	case .None:
+	case .Play: rl.DrawTriangle({cx - h * 0.8, cy - h}, {cx - h * 0.8, cy + h}, {cx + h, cy}, c)
+	case .Stop: rl.DrawRectangleRec({cx - h * 0.8, cy - h * 0.8, h * 1.6, h * 1.6}, c)
+	case .Up: rl.DrawTriangle({cx, cy - h * 0.6}, {cx - h, cy + h * 0.6}, {cx + h, cy + h * 0.6}, c)
+	case .Down: rl.DrawTriangle({cx - h, cy - h * 0.6}, {cx, cy + h * 0.6}, {cx + h, cy - h * 0.6}, c)
+	case .Left: rl.DrawTriangle({cx + h * 0.6, cy - h}, {cx - h * 0.6, cy}, {cx + h * 0.6, cy + h}, c)
+	case .Right: rl.DrawTriangle({cx - h * 0.6, cy - h}, {cx - h * 0.6, cy + h}, {cx + h * 0.6, cy}, c)
+	case .Warn:
+		rl.DrawTriangle({cx, cy - h}, {cx - h * 1.1, cy + h}, {cx + h * 1.1, cy + h}, c)
+		bg := rlc(th.bg)
+		t := max(1.2, s * 0.12)
+		rl.DrawLineEx({cx, cy - h * 0.35}, {cx, cy + h * 0.35}, t, bg)
+		rl.DrawCircleV({cx, cy + h * 0.68}, t * 0.6, bg)
+	case .Check:
+		t := max(1.4, s * 0.14)
+		rl.DrawLineEx({cx - h * 0.8, cy}, {cx - h * 0.2, cy + h * 0.6}, t, c)
+		rl.DrawLineEx({cx - h * 0.2, cy + h * 0.6}, {cx + h * 0.85, cy - h * 0.6}, t, c)
+	case .Cross:
+		t := max(1.4, s * 0.14)
+		rl.DrawLineEx({cx - h * 0.6, cy - h * 0.6}, {cx + h * 0.6, cy + h * 0.6}, t, c)
+		rl.DrawLineEx({cx - h * 0.6, cy + h * 0.6}, {cx + h * 0.6, cy - h * 0.6}, t, c)
+	}
+}
+
+// Menu text: a leading "✓ " is drawn as a check icon (the font may not have ✓).
+menu_text :: proc(r: Rect, label: string, col: Color, pad: f32) {
+	if strings.has_prefix(label, "✓ ") {
+		draw_icon(.Check, r.x + pad + fs(0.45), r.y + r.h / 2, fs(0.75), col)
+		text_in({r.x + fs(1.1), r.y, r.w - fs(1.1), r.h}, label[len("✓ "):], col, 0, 0, pad)
+		return
+	}
+	if strings.has_prefix(label, "   ") {
+		text_in({r.x + fs(1.1), r.y, r.w - fs(1.1), r.h}, strings.trim_left(label, " "), col, 0, 0, pad)
+		return
+	}
+	text_in(r, label, col, 0, 0, pad)
+}
+
+tool_button :: proc(id_s: string, r: Rect, text: string, enabled := true, selected := false, tip := "", col: Color = {}, icon := Icon.None) -> bool {
 	id := id_of(id_s)
 	h := enabled && hover(r)
 	if h {
@@ -458,7 +515,15 @@ tool_button :: proc(id_s: string, r: Rect, text: string, enabled := true, select
 	else if h do fill_round(r, th.hover, 4)
 	c := col if col[3] != 0 else th.fg
 	if !enabled do c = th.muted
-	text_in(r, text, c, 1)
+	if icon != .None {
+		// icon, then the text, centred together
+		is := fs(0.8)
+		gap: f32 = 6 if len(text) > 0 else 0
+		tw := text_w(text)
+		x := r.x + (r.w - is - gap - tw) / 2
+		draw_icon(icon, x + is / 2, r.y + r.h / 2, is, c)
+		if len(text) > 0 do draw_text(text, x + is + gap, r.y + (r.h - fs()) / 2, c)
+	} else do text_in(r, text, c, 1)
 	return h && ui.released[0] && ui.active == id
 }
 
@@ -516,6 +581,7 @@ edit_line :: proc(id: u64, r: Rect, init: string) -> (commit: bool, cancelled: b
 		append(&ui.edit_buf, ..transmute([]u8)init)
 		ui.edit_cur = len(ui.edit_buf)
 		ui.edit_sel_all = true
+		ui.edit_drag = false
 		return
 	}
 	if ui.focus != id do return
@@ -532,11 +598,11 @@ edit_line :: proc(id: u64, r: Rect, init: string) -> (commit: bool, cancelled: b
 		ui.focus = 0
 		return true, false
 	}
-	if h && ui.pressed[0] {
-		// place the cursor at the click
-		ui.edit_sel_all = false
+	if (h && ui.pressed[0]) || (ui.edit_drag && ui.down[0]) {
+		// place the cursor at the click; dragging (or Shift+click) selects
 		s := string(ui.edit_buf[:])
 		x := r.x + 6
+		if tw := text_w(s[:ui.edit_cur]); tw > r.w - 14 do x -= tw - (r.w - 14)
 		best := 0
 		for i := 0; i <= len(s); {
 			if text_w(s[:i]) + x <= ui.mouse.x + 2 do best = i
@@ -544,19 +610,56 @@ edit_line :: proc(id: u64, r: Rect, init: string) -> (commit: bool, cancelled: b
 			_, n := utf8.decode_rune_in_string(s[i:])
 			i += n
 		}
+		if ui.pressed[0] {
+			sel_norm()
+			if !ui.shift || ui.edit_anchor < 0 do ui.edit_anchor = ui.edit_cur if ui.shift else best
+			ui.edit_drag = true
+		}
 		ui.edit_cur = best
 	}
+	if !ui.down[0] do ui.edit_drag = false
 	return false, false
+}
+
+// Turns "select all" into a selection range.
+sel_norm :: proc() {
+	if ui.edit_sel_all {
+		ui.edit_anchor = 0
+		ui.edit_cur = len(ui.edit_buf)
+		ui.edit_sel_all = false
+	}
+	ui.edit_anchor = min(ui.edit_anchor, len(ui.edit_buf))
+}
+
+// The selected byte range of the focused field.
+sel_range :: proc() -> (a, b: int, ok: bool) {
+	if ui.edit_anchor < 0 || ui.edit_anchor == ui.edit_cur do return ui.edit_cur, ui.edit_cur, false
+	return min(ui.edit_anchor, ui.edit_cur), max(ui.edit_anchor, ui.edit_cur), true
+}
+
+// Deletes the selection; false when there was none.
+sel_delete :: proc() -> bool {
+	a, b, ok := sel_range()
+	ui.edit_anchor = -1
+	if !ok do return false
+	remove_range(&ui.edit_buf, a, b)
+	ui.edit_cur = a
+	return true
+}
+
+// Shift+movement extends the selection, plain movement ends it.
+@(private = "file")
+sel_move_begin :: proc() {
+	if ui.shift {
+		if ui.edit_anchor < 0 do ui.edit_anchor = ui.edit_cur
+	} else do ui.edit_anchor = -1
 }
 
 // Typing, deleting, moving and clipboard keys for the focused field.
 edit_keys :: proc(multiline: bool) {
+	sel_norm()
 	if len(ui.chars) > 0 {
-		if ui.edit_sel_all {
-			clear(&ui.edit_buf)
-			ui.edit_cur = 0
-			ui.edit_sel_all = false
-		}
+		sel_delete()
 		for c in ui.chars {
 			b, n := utf8.encode_rune(c)
 			inject_at(&ui.edit_buf, ui.edit_cur, ..b[:n])
@@ -564,45 +667,45 @@ edit_keys :: proc(multiline: bool) {
 		}
 	}
 	if key(.BACKSPACE) {
-		if ui.edit_sel_all {
-			clear(&ui.edit_buf); ui.edit_cur = 0; ui.edit_sel_all = false
-		} else if ui.edit_cur > 0 {
+		if !sel_delete() && ui.edit_cur > 0 {
 			_, n := utf8.decode_last_rune(ui.edit_buf[:ui.edit_cur])
 			remove_range(&ui.edit_buf, ui.edit_cur - n, ui.edit_cur)
 			ui.edit_cur -= n
 		}
 	}
 	if key(.DELETE) {
-		if ui.edit_sel_all {
-			clear(&ui.edit_buf); ui.edit_cur = 0; ui.edit_sel_all = false
-		} else if ui.edit_cur < len(ui.edit_buf) {
+		if !sel_delete() && ui.edit_cur < len(ui.edit_buf) {
 			_, n := utf8.decode_rune(ui.edit_buf[ui.edit_cur:])
 			remove_range(&ui.edit_buf, ui.edit_cur, ui.edit_cur + n)
 		}
 	}
 	if key(.LEFT) {
-		ui.edit_sel_all = false
-		if ui.edit_cur > 0 {_, n := utf8.decode_last_rune(ui.edit_buf[:ui.edit_cur]); ui.edit_cur -= n}
+		a, _, had := sel_range()
+		sel_move_begin()
+		if had && !ui.shift do ui.edit_cur = a
+		else if ui.edit_cur > 0 {_, n := utf8.decode_last_rune(ui.edit_buf[:ui.edit_cur]); ui.edit_cur -= n}
 	}
 	if key(.RIGHT) {
-		ui.edit_sel_all = false
-		if ui.edit_cur < len(ui.edit_buf) {_, n := utf8.decode_rune(ui.edit_buf[ui.edit_cur:]); ui.edit_cur += n}
+		_, b, had := sel_range()
+		sel_move_begin()
+		if had && !ui.shift do ui.edit_cur = b
+		else if ui.edit_cur < len(ui.edit_buf) {_, n := utf8.decode_rune(ui.edit_buf[ui.edit_cur:]); ui.edit_cur += n}
 	}
 	s := string(ui.edit_buf[:])
 	if key(.HOME) {
-		ui.edit_sel_all = false
+		sel_move_begin()
 		if multiline {
 			for ui.edit_cur > 0 && s[ui.edit_cur - 1] != '\n' do ui.edit_cur -= 1
 		} else do ui.edit_cur = 0
 	}
 	if key(.END) {
-		ui.edit_sel_all = false
+		sel_move_begin()
 		if multiline {
 			for ui.edit_cur < len(s) && s[ui.edit_cur] != '\n' do ui.edit_cur += 1
 		} else do ui.edit_cur = len(ui.edit_buf)
 	}
 	if multiline && (key(.UP) || key(.DOWN)) {
-		ui.edit_sel_all = false
+		sel_move_begin()
 		ls := ui.edit_cur
 		for ls > 0 && s[ls - 1] != '\n' do ls -= 1
 		col := ui.edit_cur - ls
@@ -621,23 +724,26 @@ edit_keys :: proc(multiline: bool) {
 			}
 		}
 	}
-	if ui.ctrl && key_pressed(.A) do ui.edit_sel_all = true
-	if ui.ctrl && key_pressed(.C) {
-		rl.SetClipboardText(cstr(string(ui.edit_buf[:])))
+	if ui.ctrl && key_pressed(.A) {
+		ui.edit_anchor = 0
+		ui.edit_cur = len(ui.edit_buf)
 	}
-	if ui.ctrl && key_pressed(.X) && ui.edit_sel_all {
-		rl.SetClipboardText(cstr(string(ui.edit_buf[:])))
-		clear(&ui.edit_buf); ui.edit_cur = 0; ui.edit_sel_all = false
+	if ui.ctrl && (key_pressed(.C) || key_pressed(.X)) {
+		// the selection, or the whole text when nothing is selected
+		a, b, ok := sel_range()
+		if !ok do a, b = 0, len(ui.edit_buf)
+		rl.SetClipboardText(cstr(string(ui.edit_buf[a:b])))
+		if key_pressed(.X) && ok do sel_delete()
 	}
 	if ui.ctrl && key_pressed(.V) {
 		clip := string(rl.GetClipboardText())
 		if !multiline do clip = one_line(clip)
-		if ui.edit_sel_all {clear(&ui.edit_buf); ui.edit_cur = 0; ui.edit_sel_all = false}
+		sel_delete()
 		inject_at(&ui.edit_buf, ui.edit_cur, ..transmute([]u8)clip)
 		ui.edit_cur += len(clip)
 	}
 	if multiline && (key_pressed(.ENTER) || key_pressed(.KP_ENTER)) && !ui.ctrl {
-		if ui.edit_sel_all {clear(&ui.edit_buf); ui.edit_cur = 0; ui.edit_sel_all = false}
+		sel_delete()
 		inject_at(&ui.edit_buf, ui.edit_cur, '\n')
 		ui.edit_cur += 1
 	}
@@ -655,7 +761,8 @@ draw_field :: proc(id: u64, r: Rect, shown: string, col: Color, placeholder := "
 		tw := text_w(s[:ui.edit_cur])
 		x := r.x + 6
 		if tw > r.w - 14 do x -= tw - (r.w - 14)
-		if ui.edit_sel_all && len(s) > 0 do fill({x - 1, r.y + 3, text_w(s) + 2, r.h - 6}, th.sel)
+		sel_norm()
+		if a, b, ok := sel_range(); ok do fill({x + text_w(s[:a]) - 1, r.y + 3, text_w(s[a:b]) + 2, r.h - 6}, th.sel)
 		draw_text(s, x, r.y + (r.h - fs()) / 2, th.fg)
 		if math.mod(ui.time, 1.0) < 0.6 do fill({x + tw, r.y + 4, 1.5, r.h - 8}, th.fg)
 		idle_redraw_blink(ui.time)
@@ -722,6 +829,7 @@ text_area :: proc(id_s: string, r: Rect, s: ^string, mono_font := true) {
 		append(&ui.edit_buf, ..transmute([]u8)s^)
 		ui.edit_cur = len(ui.edit_buf)
 		ui.edit_sel_all = false
+		ui.edit_anchor = -1
 	}
 	focused := ui.focus == id
 	if focused {
@@ -750,9 +858,21 @@ text_area :: proc(id_s: string, r: Rect, s: ^string, mono_font := true) {
 	}
 	if h && ui.wheel != 0 do sc = max(0, sc - ui.wheel * lh * 3)
 	ui.scroll[id] = sc
+	sa, sb, has_sel := sel_range()
+	loff := 0
 	for l, i in lines {
 		y := r.y + 6 + f32(i) * lh - sc
 		if y > r.y + r.h do break
+		if focused && has_sel && sa <= loff + len(l) && sb >= loff {
+			// the selected part of this line
+			a := clamp(sa - loff, 0, len(l))
+			b := clamp(sb - loff, 0, len(l))
+			wf := mono_w if mono_font else text_w
+			x0 := r.x + 8 + wf(l[:a], sz)
+			x1 := r.x + 8 + wf(l[:b], sz) + (sz * 0.4 if sb > loff + len(l) else 0)
+			fill({x0, y - 1, x1 - x0, lh}, th.sel)
+		}
+		loff += len(l) + 1
 		if mono_font do draw_mono(l, r.x + 8, y, th.fg, sz)
 		else do draw_text(l, r.x + 8, y, th.fg, sz)
 		if focused && i == cl do idle_redraw_blink(ui.time)
@@ -762,9 +882,9 @@ text_area :: proc(id_s: string, r: Rect, s: ^string, mono_font := true) {
 			fill({x, y, 1.5, sz + 2}, th.fg)
 		}
 	}
-	if focused && ui.edit_sel_all do fill(r_inset(r, 2), alpha(th.accent, 40))
 	pop_clip()
-	if focused && h && ui.pressed[0] {
+	if !ui.down[0] do ui.edit_drag = false
+	if focused && ((h && ui.pressed[0]) || (ui.edit_drag && ui.down[0])) {
 		// click: move the cursor
 		row := int((ui.mouse.y - r.y - 6 + sc) / lh)
 		row = clamp(row, 0, len(lines) - 1)
@@ -776,8 +896,12 @@ text_area :: proc(id_s: string, r: Rect, s: ^string, mono_font := true) {
 			w := mono_w(l[:i], sz) if mono_font else text_w(l[:i], sz)
 			if r.x + 8 + w <= ui.mouse.x + 3 do best = i
 		}
+		if ui.pressed[0] {
+			sel_norm()
+			if !ui.shift || ui.edit_anchor < 0 do ui.edit_anchor = ui.edit_cur if ui.shift else off + best
+			ui.edit_drag = true
+		}
 		ui.edit_cur = off + best
-		ui.edit_sel_all = false
 	}
 }
 
@@ -821,7 +945,13 @@ popup_open :: proc(id: u64, r: Rect, items: []string, sel := -1) {
 	ui.popup_rect = r
 	ui.popup_sel = sel
 	ui.popup_open_frame = true
-	ui.scroll[id] = 0
+	// scrolled to show the current item when the list is longer than the popup
+	ih := fs() + 10
+	total: f32 = 6
+	for it in items do total += (8 if it == "-" else ih)
+	ui.scroll[id] = clampf32(f32(max(sel, 0)) * ih - (r.h - ih) / 2, 0, max(0, total - r.h)) if sel >= 0 else 0
+	ui.sub_open = -1
+	ui.sub_result = -1
 }
 
 // Menu items: "Label\tShortcut", "-" separator, "~Label" disabled, "✓ Label" checked.
@@ -872,7 +1002,27 @@ draw_popup :: proc() {
 	total: f32 = 6
 	for it in ui.popup_items do total += (8 if it == "-" else ih)
 	if r_contains(r, ui.mouse) && ui.wheel != 0 do sc = clampf32(sc - ui.wheel * ih * 3, 0, max(0, total - r.h))
+	// a scrollbar when the list is longer than the popup: shows there is more; drag it or use the wheel
+	has_bar := total > r.h + 1
+	track := Rect{r.x + r.w - 10, r.y + 2, 10, r.h - 4}
+	on_bar := has_bar && r_contains(track, ui.mouse)
+	bh, by: f32
+	if has_bar {
+		bh = max(track.h * r.h / total, 20)
+		by = track.y + (track.h - bh) * sc / (total - r.h)
+		if on_bar && ui.pressed[0] {
+			if ui.mouse.y >= by && ui.mouse.y <= by + bh do ui.sb_drag, ui.sb_grab = ui.popup_id, ui.mouse.y - by
+			else do sc = clampf32(sc + (r.h if ui.mouse.y > by else -r.h), 0, total - r.h)
+		}
+		if ui.sb_drag == ui.popup_id {
+			if !ui.down[0] do ui.sb_drag = 0
+			else if track.h > bh do sc = clampf32((ui.mouse.y - ui.sb_grab - track.y) / (track.h - bh) * (total - r.h), 0, total - r.h)
+		}
+		by = track.y + (track.h - bh) * sc / (total - r.h)
+	}
+	on_bar = on_bar || ui.sb_drag == ui.popup_id // the items ignore the mouse while on the bar
 	ui.scroll[ui.popup_id] = sc
+	in_sub := ui.sub_open >= 0 && r_contains(ui.sub_rect, ui.mouse)
 	push_clip(r)
 	y := r.y + 3 - sc
 	for it, i in ui.popup_items {
@@ -886,19 +1036,76 @@ draw_popup :: proc() {
 		label, short := menu_split(it)
 		disabled := strings.has_prefix(label, "~")
 		if disabled do label = label[1:]
-		hv := r_contains(ir, ui.mouse) && !disabled
-		if hv do fill_round(ir, th.accent, 3)
+		// only the visible part of the list: items scrolled out of it are clipped, not clickable
+		hv := r_contains(ir, ui.mouse) && r_contains(r, ui.mouse) && !disabled && !in_sub && !on_bar
+		is_sub := short == "▸" && ui.submenu_fn != nil
+		if is_sub && hv && ui.sub_open != i {
+			// open the submenu beside the item (on the left when there is no room on the right)
+			for x in ui.sub_items do delete(x)
+			clear(&ui.sub_items)
+			for x in ui.submenu_fn(label) do append(&ui.sub_items, strings.clone(x))
+			w, h := menu_size(ui.sub_items[:])
+			sx := r.x + r.w - 2
+			if sx + w > screen_w() do sx = max(0, r.x - w + 2)
+			sy := min(ir.y - 3, screen_h() - h)
+			ui.sub_rect = {sx, max(0, sy), w, min(h, screen_h())}
+			ui.sub_open = i
+		} else if hv && !is_sub do ui.sub_open = -1
+		open_here := is_sub && ui.sub_open == i
+		if hv || open_here do fill_round(ir, th.accent, 3)
 		else if i == ui.popup_sel do fill_round(ir, th.sel, 3)
-		col := th.accent_fg if hv else (th.muted if disabled else th.fg)
-		text_in(ir, label, col, 0, 0, 10)
-		if len(short) > 0 do text_in(ir, short, th.accent_fg if hv else th.muted, 2, fs(0.9), 10)
-		if hv && ui.released[0] && !ui.popup_open_frame {
+		col := th.accent_fg if hv || open_here else (th.muted if disabled else th.fg)
+		menu_text(ir, label, col, 10)
+		if is_sub {
+			// a small right-pointing triangle
+			c := rlc(th.accent_fg if hv || open_here else th.muted)
+			ax := ir.x + ir.w - 12
+			ay := ir.y + ir.h / 2
+			k := fs(0.28)
+			rl.DrawTriangle({ax - k, ay - k * 1.2}, {ax - k, ay + k * 1.2}, {ax + k, ay}, c)
+		} else if len(short) > 0 do text_in(ir, short, th.accent_fg if hv || open_here else th.muted, 2, fs(0.9), 10)
+		if hv && !is_sub && ui.released[0] && !ui.popup_open_frame {
 			ui.popup_result = i
 			ui.popup_result_id = ui.popup_id
 			ui.popup_id = 0
 		}
 	}
 	pop_clip()
+	if has_bar {
+		if on_bar do fill_round(track, alpha(th.muted, 40), 3)
+		fill_round({track.x + 2, by, 6, bh}, alpha(th.muted, 210 if on_bar else 150), 3)
+	}
+	if ui.sub_open >= 0 && ui.popup_id != 0 {
+		// the open submenu
+		sr := ui.sub_rect
+		fill_round({sr.x + 3, sr.y + 4, sr.w, sr.h}, th.shadow, 5)
+		fill_round(sr, th.popup, 5)
+		stroke_round(sr, th.border, 5)
+		push_clip(sr)
+		sy := sr.y + 3
+		for it, j in ui.sub_items {
+			if it == "-" {
+				line(sr.x + 8, sy + 4, sr.x + sr.w - 8, sy + 4, th.border)
+				sy += 8
+				continue
+			}
+			ir := Rect{sr.x + 3, sy, sr.w - 6, ih}
+			sy += ih
+			label, short := menu_split(it)
+			hv := r_contains(ir, ui.mouse)
+			if hv do fill_round(ir, th.accent, 3)
+			menu_text(ir, label, th.accent_fg if hv else th.fg, 10)
+			if len(short) > 0 do text_in(ir, short, th.accent_fg if hv else th.muted, 2, fs(0.9), 10)
+			if hv && ui.released[0] && !ui.popup_open_frame {
+				ui.popup_result = ui.sub_open
+				ui.sub_result = j
+				ui.popup_result_id = ui.popup_id
+				ui.popup_id = 0
+			}
+		}
+		pop_clip()
+		if in_sub do r = sr // a click in the submenu is not a click outside
+	}
 	if !ui.popup_open_frame && (ui.pressed[0] || ui.pressed[1]) && !r_contains(r, ui.mouse) {
 		ui.popup_id = 0
 		ui.popup_result_id = 0
@@ -944,9 +1151,31 @@ scroll_end :: proc(id_s: string, r: Rect, content_h: f32) {
 	sc = clampf32(sc, 0, max(0, content_h - r.h))
 	ui.scroll[id] = sc
 	if content_h > r.h {
+		// a scrollbar that can be dragged, or clicked above / below the thumb to page
 		bh := max(r.h * r.h / content_h, 24)
-		by := r.y + (r.h - bh) * sc / (content_h - r.h)
-		fill_round({r.x + r.w - 5, by, 4, bh}, alpha(th.muted, 140), 2)
+		span := r.h - bh
+		by := r.y + span * sc / (content_h - r.h)
+		track := Rect{r.x + r.w - 10, r.y, 10, r.h}
+		thumb := Rect{r.x + r.w - 8, by, 6, bh}
+		over := hover(track)
+		if over && ui.pressed[0] {
+			if r_contains({track.x, by, track.w, bh}, ui.mouse) {
+				ui.sb_drag, ui.sb_grab = id, ui.mouse.y - by
+			} else {
+				sc = clampf32(sc + (r.h if ui.mouse.y > by else -r.h), 0, content_h - r.h)
+			}
+			ui.pressed[0] = false
+		}
+		if ui.sb_drag == id {
+			if !ui.down[0] do ui.sb_drag = 0
+			else if span > 0 do sc = clampf32((ui.mouse.y - ui.sb_grab - r.y) / span * (content_h - r.h), 0, content_h - r.h)
+			by = r.y + span * sc / (content_h - r.h)
+			thumb.y = by
+		}
+		ui.scroll[id] = sc
+		hot := over || ui.sb_drag == id
+		if hot do fill_round(track, alpha(th.muted, 40), 3)
+		fill_round(thumb, alpha(th.muted, 200 if hot else 140), 3)
 	}
 }
 
