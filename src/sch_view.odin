@@ -217,7 +217,12 @@ draw_flag :: proc(v: View, f: Flag, col: Color, lw: f32, op_val: string = "") {
 
 flag_rect :: proc(v: View, f: Flag) -> Rect {
 	p := to_scr(v, pf(f.pos))
-	if is_ground(f) do return {p.x - 16 * v.z, p.y - 4 * v.z, 32 * v.z, 22 * v.z}
+	if is_ground(f) {
+		// the lead and the triangle (below the pin, then turned with the symbol), not the pin
+		a := to_scr(v, pf(xform_p(f.pos, f.rot, false, {-20, 3})))
+		b := to_scr(v, pf(xform_p(f.pos, f.rot, false, {20, 38})))
+		return {min(a.x, b.x), min(a.y, b.y), abs(b.x - a.x), abs(b.y - a.y)}
+	}
 	sz := S.text_size * v.z
 	tw := text_w(f.name, sz)
 	h := sz * 1.3
@@ -268,6 +273,8 @@ sch_hit :: proc(d: ^Doc, v: View, m: [2]f32) -> Hit {
 		dd := seg_dist(p, pf(w.a), pf(w.b))
 		if dd < best_w {best_w = dd; bw = i}
 	}
+	// a ground's whole body first: the wire to it runs right up to its lead
+	for i := len(s.flags) - 1; i >= 0; i -= 1 do if is_ground(s.flags[i]) && r_contains(flag_rect(v, s.flags[i]), m) do return {.Flag, i}
 	if bw >= 0 && best_w <= tol * 0.8 do return {.Wire, bw}
 	for i := len(s.texts) - 1; i >= 0; i -= 1 do if r_contains(text_rect(v, s.texts[i]), m) do return {.Text, i}
 	for i := len(s.flags) - 1; i >= 0; i -= 1 do if r_contains(flag_rect(v, s.flags[i]), m) do return {.Flag, i}
@@ -833,6 +840,7 @@ interact_select :: proc(d: ^Doc, v: View, r: Rect, hit: Hit, msnap: P, mp: [2]f3
 					if sym := symbol_find(c.sym); sym != nil do for _, k in sym.pins do moved[comp_pin(&c, sym, k)] = true
 				}
 				for w in s.wires do if w.sel {moved[w.a] = true; moved[w.b] = true}
+				for f in s.flags do if f.sel do moved[f.pos] = true
 				if S.rubber_band && !d.drag.detach do wires_orthogonalize(s, moved)
 				wires_cleanup(s)
 				doc_push_undo_text(d, d.drag.base)
@@ -949,6 +957,20 @@ context_pick :: proc(d: ^Doc, idx: int) {
 	}
 }
 
+// Something that is not being moved touches p: a pin, a label, or the middle of a wire.
+@(private = "file")
+anchored_at :: proc(s: ^Schematic, p: P) -> bool {
+	for &c in s.comps do if !c.sel {
+		sym := symbol_find(c.sym)
+		if sym == nil do continue
+		for k in 0 ..< len(sym.pins) do if comp_pin(&c, sym, k) == p do return true
+	}
+	for f in s.flags do if !f.sel && f.pos == p do return true
+	// the middle of a wire, or a wire end that stayed
+	for w in s.wires do if !w.sel && (in_segment(p, w.a, w.b) || w.a == p || w.b == p) do return true
+	return false
+}
+
 // Moves the selection by delta from move_base; connected wire ends follow (rubber band).
 @(private = "file")
 apply_move :: proc(d: ^Doc, delta: P) {
@@ -971,12 +993,34 @@ apply_move :: proc(d: ^Doc, delta: P) {
 		w.b += delta
 	}
 	for &t in s.texts do if t.sel do t.pos += delta
-	if S.rubber_band && !d.drag.detach {
+	if S.rubber_band && !d.drag.detach && delta != {} {
+		// points that connect through the middle of wires: pins, labels and wire ends that stay
+		taps := make([dynamic]P, context.temp_allocator)
+		for &c in s.comps do if !c.sel {
+			if sym := symbol_find(c.sym); sym != nil do for k in 0 ..< len(sym.pins) do append(&taps, comp_pin(&c, sym, k))
+		}
+		for f in s.flags do if !f.sel do append(&taps, f.pos)
+		for w in s.wires do append(&taps, w.a, w.b)
+		// a wire end on a moved pin follows it, unless the shorter wire would leave a tap behind
 		for &w in s.wires {
 			if w.sel do continue
-			if moved[w.a] do w.a += delta
-			if moved[w.b] do w.b += delta
+			na, nb := w.a, w.b
+			if moved[w.a] do na += delta
+			if moved[w.b] do nb += delta
+			if na == w.a && nb == w.b do continue
+			keeps := true
+			for t in taps do if in_segment(t, w.a, w.b) && !on_segment(t, na, nb) do keeps = false
+			if keeps do w.a, w.b = na, nb
 		}
+		// a moved pin that was joined to something staying behind (a pin, a label, the middle of
+		// a wire) keeps the connection: a new wire from there to where it went
+		stubs := make([dynamic]P, context.temp_allocator)
+		for p in moved do if anchored_at(s, p) do append(&stubs, p)
+		for p in stubs do append(&s.wires, Wire{a = p, b = p + delta})
+		// straight horizontal and vertical wires while dragging, not only at the end
+		ends := make(map[P]bool, 32, context.temp_allocator)
+		for p in moved do ends[p + delta] = true
+		wires_orthogonalize(s, ends)
 	}
 	d.dirty = true
 }

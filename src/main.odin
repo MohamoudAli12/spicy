@@ -76,14 +76,14 @@ cli_sim :: proc(sch: ^Schematic, args: []string) -> ^Simulator_Def {
 	for a, i in args do if a == "--sim" && i + 1 < len(args) do id = args[i + 1]
 	sim := simulator_def(id)
 	if sim == nil {
-		fmt.eprintfln("unknown simulator \"%s\" (settings.edn :simulators)", id)
-		os.exit(2)
+		cli_fail(EXIT_USAGE, "usage", fmt.tprintf("unknown simulator \"%s\" (spicy --list simulators)", id))
 	}
 	return sim
 }
 
 main :: proc() {
-	rest, level, log_file, log_err := log_parse_args(os.args[1:])
+	rest0, level, log_file, log_err := log_parse_args(os.args[1:])
+	rest := out_fmt_parse(rest0)
 	// answered before the log file is opened: these never touch the disk
 	if len(rest) > 0 {
 		switch rest[0] {
@@ -93,6 +93,7 @@ main :: proc() {
 		switch rest[0] {
 		case "--help", "-h":
 			fmt.print(HELP)
+			fmt.print("\n", CLI_HELP)
 			return
 		case "--version":
 			fmt.println("spicy", SPICY_VERSION)
@@ -112,6 +113,7 @@ main :: proc() {
 	if len(log_err) > 0 do log.warn(log_err)
 	log.debugf("spicy %s (%s/%s), log level %s, log file %s", SPICY_VERSION, ODIN_OS, ODIN_ARCH, level_name(log_level()), log_file_path())
 	log.debugf("arguments: %v", rest)
+	if len(rest) > 0 && cli_main(rest) do return
 	if len(rest) > 0 {
 		switch rest[0] {
 		case "--paths":
@@ -202,54 +204,6 @@ main :: proc() {
 			if !write_text(rest[2], sch_to_edn(&sch)) {
 				fmt.eprintln("cannot write", rest[2])
 				os.exit(1)
-			}
-			return
-		case "--netlist", "--run":
-			if len(rest) < 2 {
-				fmt.eprintln(HELP)
-				os.exit(2)
-			}
-			load_config()
-			sch, w, err := load_schematic_file(rest[1])
-			if len(err) > 0 {
-				fmt.eprintln(err)
-				os.exit(1)
-			}
-			for x in w do fmt.eprintln("warning:", x)
-			sim := cli_sim(&sch, rest[2:])
-			if rest[0] == "--netlist" {
-				nl := netlist_build(&sch, sim, tcat("spicy: ", base_name(rest[1])), dir_of(abs_path(rest[1])))
-				fmt.print(nl.text)
-				for x in nl.warnings do fmt.eprintln("warning:", x)
-				for x in nl.errors do fmt.eprintln("error:", x)
-				if len(nl.errors) > 0 do os.exit(1)
-				return
-			}
-			r: Run
-			run_start(&r, &sch, rest[1], 0, sim)
-			for r.state == .Running {
-				time.sleep(5 * time.Millisecond)
-				run_poll(&r)
-			}
-			for x in r.warnings do fmt.eprintln("warning:", x)
-			if r.state == .Failed {
-				fmt.eprintln(r.message)
-				os.exit(1)
-			}
-			fmt.println(r.message)
-			for &p in r.plots {
-				fmt.printfln("plot \"%s\" (%s, %d points%s)", p.name, base_name(p.file), p.npoints, ", complex" if p.complex else "")
-				for v in p.vecs {
-					last := len(v.re) - 1
-					if last < 0 do continue
-					fmt.printfln("  %-28s %s", v.name, fmt_eng(v.re[last], v.unit) if !p.complex else fmt.tprintf("%s ∠ %.1f°", fmt_eng(abs_c(v.re[last], v.im[last]), v.unit), phase_deg(v.re[last], v.im[last])))
-				}
-			}
-			for a, i in rest do if a == "--csv" && i + 1 < len(rest) {
-				if !write_csv(&r.plots[len(r.plots) - 1], rest[i + 1]) {
-					fmt.eprintln("cannot write", rest[i + 1])
-					os.exit(1)
-				}
 			}
 			return
 		}

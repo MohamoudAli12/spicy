@@ -181,17 +181,17 @@ check "missing include"      "$bin" --netlist "$work/inc.edn" "file not found"
 
 if command -v ngspice >/dev/null 2>&1; then
 	# V(dd) = 2 V by hand: 5 V through 1k into an NMOS in triode (kp·W/L = 0.5 mA/V², vgs = 5 V)
-	check "ngspice subckt"     "$bin" --run "$work/fet.edn" "v(dd)                        2 V"
-	check "ngspice subckt I"   "$bin" --run "$work/fet.edn" "i(vsns_m1_d)"
-	check "ngspice .model"     "$bin" --run "$work/fet.edn" "v(a)"
+	check "ngspice subckt"     "$bin" --text --run "$work/fet.edn" "v(dd)                        2 V"
+	check "ngspice subckt I"   "$bin" --text --run "$work/fet.edn" "i(vsns_m1_d)"
+	check "ngspice .model"     "$bin" --text --run "$work/fet.edn" "v(a)"
 	# a failed run must not show the raw file of another schematic in the same folder
 	sed 's/:value "1k" :at \[400 0\]/:value "1k bad=(" :at [400 0]/' "$work/fet.edn" >"$work/bad.edn"
-	check "failed run, no stale" "$bin" --run "$work/bad.edn" "without results"
-	check "ngspice transient"  "$bin" --run "$work/rc_lowpass.edn" "Transient Analysis"
-	check "ngspice netlist run" "$bin" --run "$work/buck.cir" "v(out)"
-	check "ngspice ac"         "$bin" --run "$work/rc_ac.edn" "AC Analysis"
-	check "ngspice opamp"      "$bin" --run "$work/opamp_inverting.edn" "v(out)"
-	check "ngspice switch"     "$bin" --run "$work/switch.edn" "i(@s1[i])"
+	check "failed run, no stale" "$bin" --text --run "$work/bad.edn" "without results"
+	check "ngspice transient"  "$bin" --text --run "$work/rc_lowpass.edn" "Transient Analysis"
+	check "ngspice netlist run" "$bin" --text --run "$work/buck.cir" "v(out)"
+	check "ngspice ac"         "$bin" --text --run "$work/rc_ac.edn" "AC Analysis"
+	check "ngspice opamp"      "$bin" --text --run "$work/opamp_inverting.edn" "v(out)"
+	check "ngspice switch"     "$bin" --text --run "$work/switch.edn" "i(@s1[i])"
 	# PSpice models (VSWITCH, TEMP): ngspice runs in its PSpice compatibility mode. 1 V through
 	# the switch (1 ohm on) into 1k: v(b) = 999 mV, from an .include'd file and from an imported model
 	cat >"$work/psw.lib" <<'EOF'
@@ -208,16 +208,43 @@ EOF
 			" :texts [{:at [0 200] :text \"V1 a 0 1\nVc c 0 2\n$which\n.op\" :directive true}]}" >"$work/psw.edn"
 		name=$(echo "$which" | cut -c10-13)
 		check "pspice mode ($name)"    "$bin" --netlist "$work/psw.edn" "ngbehavior=psa"
-		check "pspice model run ($name)" "$bin" --run "$work/psw.edn" "999 mV"
+		check "pspice model run ($name)" "$bin" --text --run "$work/psw.edn" "999 mV"
 	done
 	check "no pspice mode"     "$bin" --netlist "$work/switch.edn" "* spicy"
 	if "$bin" --netlist "$work/switch.edn" 2>&1 | grep -q ngbehavior; then fail "plain netlist without pspice mode"; else pass "plain netlist without pspice mode"; fi
-	"$bin" --run "$work/opamp_inverting.edn" --csv "$work/o.csv" >/dev/null 2>&1
+	"$bin" --text --run "$work/opamp_inverting.edn" --csv "$work/o.csv" >/dev/null 2>&1
 	gain=$(awk -F, 'NR>1 { if ($4 > m) m = $4 } END { printf "%.2f", m / 0.1 }' "$work/o.csv")
 	if [ "$gain" = "10.00" ] || [ "$gain" = "9.99" ]; then pass "opamp gain $gain"; else fail "opamp gain $gain (want 10)"; fi
 else
 	echo "skip ngspice runs (ngspice is not on the PATH)"
 fi
+
+# editing without the GUI (scripts, AI agents): build an RC filter from nothing
+e="$work/agent.edn"
+check "new"            "$bin" --new "$e" ":created true"
+check "add part"       "$bin" --add "$e" voltage V1 --value "SIN(0 1 1k)" --at 0,0 ':added "V1"'
+check "add rotated"    "$bin" --add "$e" resistor R1 --value 1k --at 160,-64 --rot 1 ':rot 1'
+check "add auto ref"   "$bin" --add "$e" capacitor --value 1u --at 320,0 ':added "C1"'
+check "connect"        "$bin" --connect "$e" V1.P R1.1 ':connected ["V1.P" "R1.1"]'
+check "connect net"    "$bin" --connect "$e" R1.2 C1.1 --net out ':net "out"'
+check "ground on pin"  "$bin" --add "$e" ground --to V1.2 ':added "ground"'
+"$bin" --add "$e" ground --to C1.2 >/dev/null 2>&1
+check "directive"      "$bin" --add "$e" directive ".tran 10u 3m" ':added ".tran 10u 3m"'
+check "check ok"       "$bin" --check "$e" ':ok true'
+check "get pin net"    "$bin" --get "$e" C1 ':net "out"'
+check "set value"      "$bin" --set "$e" R1.value=2k ':changed ["R1.value=2k"]'
+check "get value"      "$bin" --get "$e" R1 ':value "2k"'
+check "json"           "$bin" --get "$e" R1 --json '"value": "2k"'
+check "do rotate"      "$bin" --do "$e" edit/rotate C1 ':action "edit/rotate"'
+check "unknown part"   "$bin" --set "$e" R9.value=1 ':kind :not-found'
+"$bin" --set "$e" R9.value=1 >/dev/null 2>&1; [ $? = 1 ] && pass "exit 1 on a missing part" || fail "exit 1 on a missing part"
+"$bin" --get /nonexistent.edn >/dev/null 2>&1; [ $? = 3 ] && pass "exit 3 on a missing file" || fail "exit 3 on a missing file"
+"$bin" --set >/dev/null 2>&1; [ $? = 2 ] && pass "exit 2 on bad usage" || fail "exit 2 on bad usage"
+check "gui-only action" "$bin" --do "$e" file/open ':kind :gui-only'
+check "remove"         "$bin" --remove "$e" R1 ':removed ["R1"]'
+check "check finds open pins" "$bin" --check "$e" 'is not connected'
+check "list symbols"   "$bin" --list symbols ':name "res"'
+check "list actions"   "$bin" --list actions ':headless true'
 
 if [ "$fails" -gt 0 ]; then
 	echo "$fails command-line test(s) failed"

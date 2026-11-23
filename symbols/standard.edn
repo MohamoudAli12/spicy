@@ -255,7 +255,8 @@
  ;; ------------------------------------------------------------------ net flags (drawn by spicy)
  {:name "ground" :desc "Ground (net 0)" :category "Nets" :kind :ground :key "G"
   :pins [{:name "0" :at [0 0]}]
-  :graphics [[:line 0 0 0 0] [:line -16 0 16 0 0 16 -16 0]]}
+  ;; a short lead from the pin, then the triangle
+  :graphics [[:line 0 0 0 16] [:line -16 16 16 16 0 32 -16 16]]}
 
  {:name "label" :desc "Net label" :category "Nets" :kind :label :key nil
   :pins [{:name "net" :at [0 0]}]
