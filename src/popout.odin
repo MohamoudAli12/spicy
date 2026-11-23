@@ -20,8 +20,14 @@ import "vendor:raylib/rlgl"
 // The main loop draws the main window, then, after EndDrawing has polled the events of all
 // windows, every pop-out window: popouts_frame.
 
+Popout_Kind :: enum u8 {Waves, Parts}
+
+// doc_id of the parts window (it is not tied to a schematic)
+PARTS_WINDOW :: -1
+
 Popout :: struct {
-	doc_id:     int, // the schematic whose waveforms are shown
+	kind:       Popout_Kind,
+	doc_id:     int, // the schematic whose waveforms are shown (PARTS_WINDOW: the parts)
 	win:        rawptr, // GLFWwindow*
 	batch:      rlgl.RenderBatch,
 	st:         UI_State,
@@ -235,6 +241,9 @@ popout_of :: proc(doc_id: int) -> ^Popout {
 	return nil
 }
 
+// The parts window, nil when it is not open.
+parts_window :: proc() -> ^Popout {return popout_of(PARTS_WINDOW)}
+
 // The waveforms of d are shown in a window of their own.
 waves_popped_out :: proc(d: ^Doc) -> bool {return d != nil && popout_of(d.id) != nil}
 
@@ -246,6 +255,7 @@ doc_index :: proc(id: int) -> int {
 
 @(private = "file")
 popout_title :: proc(p: ^Popout) -> cstring {
+	if p.kind == .Parts do return "Parts – spicy"
 	i := doc_index(p.doc_id)
 	name := doc_title(app.docs[i]) if i >= 0 else "spicy"
 	return cstr(fmt.tprintf("%s – waveforms – spicy", name))
@@ -286,12 +296,30 @@ monitor_of :: proc(win: rawptr) -> rawptr {
 
 // Opens the waveforms of d in their own window (or raises it). False when it cannot be made.
 popout_open :: proc(d: ^Doc) -> bool {
-	if p := popout_of(d.id); p != nil {
+	p := popout_create(.Waves, d.id, "wave-window", 1100, 700, 400, 250)
+	if p == nil do return false
+	if S.w_popout_fullscreen do popout_set_fullscreen(p, true)
+	log.infof("waveforms of %s in their own window", doc_title(d))
+	return true
+}
+
+// Opens the parts window (or raises it). False when it cannot be made.
+parts_window_open :: proc() -> bool {
+	p := popout_create(.Parts, PARTS_WINDOW, "parts-window", 560, 720, 300, 300)
+	if p == nil do return false
+	log.info("parts in their own window")
+	return true
+}
+
+// A window of its own: geometry from the preference geo_pref (else w × h beside the main window).
+@(private = "file")
+popout_create :: proc(kind: Popout_Kind, doc_id: int, geo_pref: string, dw, dh, minw, minh: f32) -> ^Popout {
+	if p := popout_of(doc_id); p != nil {
 		glfwShowWindow(p.win)
 		glfwFocusWindow(p.win)
-		return true
+		return p
 	}
-	if main_win == nil do return false
+	if main_win == nil do return nil
 	// the same kind of context as the main window, sharing its objects
 	attrs := [?]c.int{GLFW_CLIENT_API, GLFW_CONTEXT_VERSION_MAJOR, GLFW_CONTEXT_VERSION_MINOR, GLFW_OPENGL_PROFILE, GLFW_OPENGL_FORWARD_COMPAT, GLFW_CONTEXT_CREATION_API}
 	for a in attrs do glfwWindowHint(a, glfwGetWindowAttrib(main_win, a))
@@ -300,10 +328,10 @@ popout_open :: proc(d: ^Doc) -> bool {
 	glfwWindowHint(GLFW_VISIBLE, 0)
 	glfwWindowHint(GLFW_SCALE_TO_MONITOR, 0)
 	k := ui_scale
-	w, h := c.int(1100 * k), c.int(700 * k)
+	w, h := c.int(dw * k), c.int(dh * k)
 	gx, gy := 0, 0
 	has_geo := false
-	if g, ok := pref_value("wave-window"); ok && edn_is_coll(g) && len(g.items) == 4 {
+	if g, ok := pref_value(geo_pref); ok && edn_is_coll(g) && len(g.items) == 4 {
 		gx, gy = int(edn_num(g.items[0])), int(edn_num(g.items[1]))
 		gw, gh := c.int(edn_num(g.items[2])), c.int(edn_num(g.items[3]))
 		if gw > 200 && gh > 150 {
@@ -312,14 +340,15 @@ popout_open :: proc(d: ^Doc) -> bool {
 		}
 	}
 	rlgl.DrawRenderBatchActive() // flush the main window's batch before switching contexts
-	win := glfwCreateWindow(w, h, "spicy – waveforms", nil, main_win)
+	win := glfwCreateWindow(w, h, "spicy", nil, main_win)
 	if win == nil {
 		glfwMakeContextCurrent(main_win)
-		log.error("cannot create the waveform window")
-		return false
+		log.errorf("cannot create a window (%v)", kind)
+		return nil
 	}
 	p := new(Popout)
-	p.doc_id = d.id
+	p.kind = kind
+	p.doc_id = doc_id
 	p.win = win
 	p.inp.chars = make([dynamic]rune)
 	glfwSetWindowUserPointer(win, p)
@@ -331,7 +360,7 @@ popout_open :: proc(d: ^Doc) -> bool {
 	glfwSetWindowCloseCallback(win, cb_close)
 	glfwSetWindowFocusCallback(win, cb_focus)
 	idle_watch_window(win)
-	glfwSetWindowSizeLimits(win, c.int(400 * k), c.int(250 * k), GLFW_DONT_CARE, GLFW_DONT_CARE)
+	glfwSetWindowSizeLimits(win, c.int(minw * k), c.int(minh * k), GLFW_DONT_CARE, GLFW_DONT_CARE)
 	if has_geo && on_some_monitor(gx, gy, int(w)) {
 		glfwSetWindowPos(win, c.int(gx), c.int(gy))
 	} else {
@@ -351,9 +380,7 @@ popout_open :: proc(d: ^Doc) -> bool {
 	append(&popouts, p)
 	glfwShowWindow(win)
 	glfwFocusWindow(win)
-	if S.w_popout_fullscreen do popout_set_fullscreen(p, true)
-	log.infof("waveforms of %s in their own window", doc_title(d))
-	return true
+	return p
 }
 
 // Closes the window; the waveforms go back into the main window.
@@ -369,7 +396,7 @@ popout_close :: proc(p: ^Popout) {
 			x, y, w, h: c.int
 			glfwGetWindowPos(p.win, &x, &y)
 			glfwGetWindowSize(p.win, &w, &h)
-			if w > 0 && h > 0 do pref_put_edn("wave-window", fmt.tprintf("[%d %d %d %d]", x, y, w, h))
+			if w > 0 && h > 0 do pref_put_edn("parts-window" if p.kind == .Parts else "wave-window", fmt.tprintf("[%d %d %d %d]", x, y, w, h))
 		}
 		rlgl.DrawRenderBatchActive()
 		glfwMakeContextCurrent(p.win)
@@ -378,7 +405,7 @@ popout_close :: proc(p: ^Popout) {
 		glfwDestroyWindow(p.win)
 		delete(p.inp.chars)
 		ordered_remove(&popouts, i)
-		if app.dlg_win == p.doc_id do app.dlg_win = 0 // its dialog moves to the main window
+		if p.kind == .Waves && app.dlg_win == p.doc_id do app.dlg_win = 0 // its dialog moves to the main window
 		free(p)
 		return
 	}
@@ -433,7 +460,7 @@ toggle_fullscreen :: proc() {
 popouts_frame :: proc() {
 	for i := 0; i < len(popouts); i += 1 {
 		p := popouts[i]
-		if p.close || doc_index(p.doc_id) < 0 {
+		if p.close || (p.kind == .Waves && doc_index(p.doc_id) < 0) {
 			popout_close(p)
 			i -= 1
 			continue
@@ -452,7 +479,8 @@ popout_draw :: proc(p: ^Popout) {
 	glfwGetFramebufferSize(p.win, &fw, &fh)
 	if fw <= 0 || fh <= 0 do return // minimised
 	p.inp.size = {f32(fw), f32(fh)}
-	idx := doc_index(p.doc_id)
+	idx := doc_index(p.doc_id) if p.kind == .Waves else app.cur
+	if idx < 0 || idx >= len(app.docs) do return
 	d := app.docs[idx]
 
 	// switch to the window: its context, batch, input, toolkit state and schematic
@@ -468,7 +496,7 @@ popout_draw :: proc(p: ^Popout) {
 	win_input = &p.inp
 	cur_popout = p
 	app.cur = idx
-	app.hover_ctx = .Waves
+	app.hover_ctx = .Waves if p.kind == .Waves else .Global
 
 	rlgl.Viewport(0, 0, fw, fh)
 	rlgl.MatrixMode(rlgl.PROJECTION)
@@ -476,13 +504,16 @@ popout_draw :: proc(p: ^Popout) {
 	rlgl.Ortho(0, f64(fw), f64(fh), 0, 0, 1)
 	rlgl.MatrixMode(rlgl.MODELVIEW)
 	rlgl.LoadIdentity()
-	bg := th.w_bg
+	bg := th.w_bg if p.kind == .Waves else th.panel
 	rlgl.ClearColor(bg.r, bg.g, bg.b, 255)
 	rlgl.ClearScreenBuffers()
 	gl_state_init()
 
 	ui_begin_frame()
-	if p.fullscreen && key_pressed(.ESCAPE) && !ui.modal && ui.popup_id == 0 && !typing() {
+	if p.kind == .Parts {
+		// the parts window: Esc closes it (when not typing in the search box)
+		if key_pressed(.ESCAPE) && ui.popup_id == 0 && !typing() do p.close = true
+	} else if p.fullscreen && key_pressed(.ESCAPE) && !ui.modal && ui.popup_id == 0 && !typing() {
 		popout_set_fullscreen(p, false)
 	} else do handle_keys()
 	if len(p.test_action) > 0 {
@@ -491,8 +522,14 @@ popout_draw :: proc(p: ^Popout) {
 		run_action(a)
 		delete(a)
 	}
-	// an action (closing the tab …) may have removed the schematic
-	if doc_index(p.doc_id) >= 0 {
+	if p.kind == .Parts {
+		if picked := parts_panel({0, 0, f32(fw), f32(fh)}, d); picked {
+			glfwFocusWindow(main_win) // place it on the schematic
+		}
+		draw_popup()
+		draw_tooltip()
+	} else if doc_index(p.doc_id) >= 0 {
+		// (an action – closing the tab … – may have removed the schematic)
 		draw_waves(d, {0, 0, f32(fw), f32(fh)})
 		draw_dialog()
 		draw_popup()
@@ -528,7 +565,7 @@ popout_draw :: proc(p: ^Popout) {
 	rlgl.SetMatrixProjection(main_proj)
 	rlgl.SetMatrixModelview(main_view)
 	rlgl.MatrixMode(rlgl.MODELVIEW)
-	if idx < len(app.docs) && app.docs[idx].id == p.doc_id do glfwSetWindowTitle(p.win, popout_title(p))
+	if p.kind == .Waves && idx < len(app.docs) && app.docs[idx].id == p.doc_id do glfwSetWindowTitle(p.win, popout_title(p))
 }
 
 // GL state lives in each context: a new context blends with (ONE, ZERO), which would draw

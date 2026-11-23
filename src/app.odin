@@ -421,7 +421,8 @@ run_action :: proc(name: string) {
 	case "place/comment":
 		dialog_text(d, -1, false)
 	case "place/component":
-		dialog_open(.Part_Picker)
+		// as loomer: a dialog in the main window, or its own window when it was moved there
+		if !(pref_bool("parts-own-window") && parts_window_open()) do dialog_open(.Part_Picker)
 	case "symbol/new":
 		symed_open(nil)
 	case "symbol/edit":
@@ -625,8 +626,7 @@ menu_items :: proc(name: string) -> []string {
 			k("Cut", "edit/cut"), k("Copy", "edit/copy"), k("Paste", "edit/paste"), k("Duplicate", "edit/duplicate"), k("Delete", "edit/delete"), "-",
 			k("Select all", "edit/select-all"), k("Rotate", "edit/rotate"), k("Mirror", "edit/mirror"), k("Properties…", "edit/properties"))
 	case "Place":
-		append(&items, k("Part…", "place/component"), k("Wire", "place/wire"), k("Ground", "place/ground"), k("Net label…", "place/label"), k("SPICE directive…", "place/directive"), k("Comment…", "place/comment"), k("Import SPICE model…", "file/import-model"), k("New symbol…", "symbol/new"), "-")
-		for s in symbols_by_category() do if s.kind == .Part do append(&items, k(s.desc, tcat("place/", s.name)))
+		append(&items, k("Part…", "place/component"), k("Wire", "place/wire"), k("Ground", "place/ground"), k("Net label…", "place/label"), k("SPICE directive…", "place/directive"), k("Comment…", "place/comment"), k("Import SPICE model…", "file/import-model"), k("New symbol…", "symbol/new"))
 	case "View":
 		append(&items, k("Fit to window", "view/fit"), k("Zoom in", "view/zoom-in"), k("Zoom out", "view/zoom-out"), "-",
 			k(tcat("✓ " if app.show_waves else "", "Waveforms"), "view/toggle-waves"), k("Move the waveforms", "view/next-layout"),
@@ -643,7 +643,8 @@ menu_items :: proc(name: string) -> []string {
 		append(&items, k("Fit", "view/fit"), k("Previous zoom", "wave/zoom-back"), k("Add plot pane", "wave/add-pane"), k("Cursor 1", "wave/cursor1"), k("Cursor 2", "wave/cursor2"), k("Marker at the mouse", "wave/marker"), k("Next analysis", "wave/next-plot"), "-",
 			k(tcat("✓ " if waves_popped_out(d) else "", "In their own window"), "wave/pop-out"), "-", "Add trace…", k("Remove all traces", "wave/clear"), k("Export CSV…", "wave/export-csv"))
 	case "Help":
-		append(&items, k("Keyboard shortcuts", "help/shortcuts"), k("Settings (settings.edn)", "help/settings"), "Themes (themes.edn)", "Shortcuts (shortcuts.edn)", "Symbols folder", k("Config folder", "help/config-folder"), "-", k("Diagnostics…", "help/diagnostics"), k("About spicy", "help/about"))
+		// the same layout as zapped's and loomer's Help menus
+		append(&items, k("Keyboard shortcuts…", "help/shortcuts"), "-", k("Settings (settings.edn)", "help/settings"), "Themes (themes.edn)", "Shortcuts (shortcuts.edn)", "Symbols folder", k("Config folder", "help/config-folder"), "-", k("Diagnostics…", "help/diagnostics"), k("About spicy", "help/about"))
 	}
 	return items[:]
 }
@@ -713,7 +714,7 @@ menu_pick :: proc(name: string, idx: int) {
 		{"Remove all traces", "wave/clear"}, {"Export CSV…", "wave/export-csv"},
 		{"Waveforms in their own window", "wave/pop-out"}, {"In their own window", "wave/pop-out"}, {"Full screen", "view/full-screen"},
 		{"Import SPICE model…", "file/import-model"},
-		{"Keyboard shortcuts", "help/shortcuts"}, {"Settings (settings.edn)", "help/settings"}, {"Config folder", "help/config-folder"},
+		{"Keyboard shortcuts…", "help/shortcuts"}, {"Settings (settings.edn)", "help/settings"}, {"Config folder", "help/config-folder"},
 		{"Diagnostics…", "help/diagnostics"}, {"About spicy", "help/about"},
 	}
 	for m in MAP do if m[0] == label {
@@ -741,7 +742,7 @@ draw_menubar :: proc(r: Rect) {
 		id := tcat("menu.", m)
 		open := app.menu_open == m && ui.popup_id == id_of(id)
 		if hover(mr) || open {
-			fill_round(mr, th.hover, 4)
+			fill_round(mr, th.pressed if open else th.hover, 4)
 			// sliding between menus while one is open
 			if ui.popup_id != 0 && len(app.menu_open) > 0 && app.menu_open != m && r_contains(mr, ui.mouse) {
 				app.menu_open = m
@@ -1200,7 +1201,7 @@ gui_main :: proc(files: []string) {
 						test_click_frame = -1
 					}
 				case strings.has_prefix(a, "in-waves:"): // run inside the waveform window
-					for p in popouts do p.test_action = strings.clone(a[9:])
+					for p in popouts do if p.kind == .Waves do p.test_action = strings.clone(a[9:])
 				case: run_action(a)
 				}
 			}
@@ -1210,7 +1211,7 @@ gui_main :: proc(files: []string) {
 		if busy && frames > 20 do frames = 20
 		if test_click_frame == -1 && frames == 22 do test_click_frame = 0
 		if len(shot) > 0 && frames == 29 do for p in popouts {
-			p.shot = strings.concatenate({strings.trim_suffix(shot, ".png"), "-waves.png"})
+			p.shot = strings.concatenate({strings.trim_suffix(shot, ".png"), "-waves.png" if p.kind == .Waves else "-parts.png"})
 		}
 		if len(shot) > 0 && frames == 30 {
 			img := rl.LoadImageFromScreen()

@@ -132,6 +132,10 @@ Netlist :: struct {
 	base_dir: string, // folder of the schematic (relative .include paths)
 	local:    []Lib_Entry, // models and subcircuits the schematic defines itself
 	ngbehavior: string, // ngspice compatibility mode the netlist needs ("psa": PSpice models), or ""
+	// Xyce: "tran" or "dc" when the run asks for its results with a .print … format=raw line
+	// (Xyce's -r raw file has no device currents: no I(R1)), and what that line prints
+	xyce_print: string,
+	xyce_vars:  string,
 }
 
 // Directive blocks can be limited to one simulator or dialect with a first line such as
@@ -435,6 +439,26 @@ netlist_spice :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: s
 			}
 		}
 		fmt.sbprintf(&b, "%s\n", spice_fix_directive(l, nl.base_dir))
+	}
+	// Xyce writes resistor, capacitor, diode … currents only when asked for them: every voltage
+	// and two-pin current (V(*) I(*)), and the pin currents of transistors (IC(Q1) …)
+	if sim_is_xyce(sim) {
+		for l in dl {
+			low := lower(strings.trim_space(l))
+			if strings.has_prefix(low, ".tran") do nl.xyce_print = "tran"
+			else if strings.has_prefix(low, ".dc") && len(nl.xyce_print) == 0 do nl.xyce_print = "dc"
+		}
+		if len(nl.xyce_print) > 0 {
+			vars := strings.builder_make(context.temp_allocator)
+			strings.write_string(&vars, "V(*) I(*)")
+			for &c in s.comps {
+				sym := symbol_find(c.sym)
+				if sym == nil || sym.kind != .Part || comp_subckt(&c, sym, nl.local) != nil do continue
+				if len(c.ref) == 0 || !strings.contains_rune("QqMmJj", rune(c.ref[0])) do continue
+				for pd in sym.pins do if len(pd.cur) > 0 && len(pd.element) == 0 do fmt.sbprintf(&vars, " I%s(%s)", strings.to_upper(pd.cur, context.temp_allocator), c.ref)
+			}
+			nl.xyce_vars = strings.clone(strings.to_string(vars), context.temp_allocator)
+		}
 	}
 	if !have_analysis do append(&nl.errors, "no analysis: add a .tran, .ac, .dc or .op directive (Simulate › Edit simulation command)")
 	strings.write_string(&b, ".end\n")

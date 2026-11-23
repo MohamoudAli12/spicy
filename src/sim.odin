@@ -85,6 +85,11 @@ run_start :: proc(r: ^Run, sch: ^Schematic, doc_path: string, doc_id: int, sim: 
 
 	title := doc_path if len(doc_path) > 0 else stem
 	nl := netlist_build(sch, sim, tcat("spicy: ", base_name(title)), dir_of(abs_path(doc_path)) if len(doc_path) > 0 else "")
+	if len(nl.xyce_print) > 0 && sim.raw != "per-analysis" {
+		// the results from a .print line (it has the device currents), not from -r (below)
+		cut := strings.last_index(nl.text, ".end")
+		if cut >= 0 do nl.text = tcat(nl.text[:cut], fmt.tprintf(".print %s format=raw file=%s %s\n", nl.xyce_print, base_name(r.raw), nl.xyce_vars), nl.text[cut:])
+	}
 	r.net_text = strings.clone(nl.text)
 	for w in nl.warnings do append(&r.warnings, strings.clone(w))
 	if len(nl.errors) > 0 {
@@ -113,6 +118,13 @@ run_start :: proc(r: ^Run, sch: ^Schematic, doc_path: string, doc_id: int, sim: 
 		x, _ = strings.replace_all(x, "{dir}", r.dir, context.temp_allocator)
 		if strings.has_prefix(x, "~/") do x = path_join(home_dir(), x[2:])
 		append(&cmd, x)
+	}
+	// Xyce with a .print … format=raw line: no -r (it would write the same file)
+	if len(nl.xyce_print) > 0 && sim.raw != "per-analysis" {
+		for i := 1; i + 1 < len(cmd); i += 1 do if cmd[i] == "-r" && cmd[i + 1] == r.raw {
+			remove_range(&cmd, i, i + 2)
+			break
+		}
 	}
 	// PSpice models: ngspice's compatibility mode (unless the command sets one itself)
 	if len(nl.ngbehavior) > 0 && sim_is_ngspice(sim) && len(cmd) > 0 && !strings.contains(strings.join(sim.command, " ", context.temp_allocator), "ngbehavior") {

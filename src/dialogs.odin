@@ -44,7 +44,8 @@ dialog_open :: proc(k: Dialog_Kind) {
 	dl := &app.dlg
 	dl.kind = k
 	dl.first_frame = true
-	app.dlg_win = cur_popout.doc_id if cur_popout != nil else 0
+	// a dialog asked for in a waveform window shows there; from the parts window, in the main one
+	app.dlg_win = cur_popout.doc_id if cur_popout != nil && cur_popout.kind == .Waves else 0
 	dl.pick = 0
 	switch k {
 	case .Open, .Save_As, .Export_Netlist, .Export_CSV, .Import_Model, .Pick_Program:
@@ -441,6 +442,14 @@ draw_dialog :: proc() {
 	ui.modal = dl.kind != .None
 }
 
+// A typed or pasted path without the quotes and spaces around it (Windows' "Copy as path"
+// puts it in quotes, and the clipboard may end it with a line break).
+clean_path :: proc(s: string) -> string {
+	p := strings.trim_space(s)
+	for len(p) >= 2 && ((p[0] == '"' && p[len(p) - 1] == '"') || (p[0] == '\'' && p[len(p) - 1] == '\'')) do p = strings.trim_space(p[1:len(p) - 1])
+	return p
+}
+
 @(private = "file")
 draw_file_dialog :: proc(d: ^Doc) {
 	dl := &app.dlg
@@ -466,9 +475,19 @@ draw_file_dialog :: proc(d: ^Doc) {
 	cut_left(&pr, 4 * ui_scale)
 	if tool_button("dlg.home", cut_left(&pr, text_w("Home") + 22 * ui_scale), "Home", true, false, "Home folder") do set_str(&dl.dir, home_dir())
 	cut_left(&pr, 6 * ui_scale)
-	dir := dl.dir
-	if text_field("dlg.dir", pr, &dir) {
-		if dir_exists(dir) do set_str(&dl.dir, dir)
+	// (edit_field, not text_field on a copy of dl.dir: committing would free dl.dir's text)
+	if commit, _, typed := edit_field("dlg.dir", pr, dl.dir); commit {
+		// a folder, or a file (a pasted program path): go to its folder and pick it
+		p := clean_path(typed)
+		if dir_exists(p) {
+			set_str(&dl.dir, p)
+		} else if file_exists(p) && dir_exists(dir_name(p)) {
+			name := strings.clone(base_name(p), context.temp_allocator)
+			set_str(&dl.dir, dir_name(p))
+			set_str(&dl.name, name)
+		} else if len(p) > 0 {
+			status(tcat("no such folder: ", p), true)
+		}
 	}
 	bot := cut_bottom(&b, fs() + 16)
 	cut_bottom(&b, 8)
@@ -523,7 +542,9 @@ draw_file_dialog :: proc(d: ^Doc) {
 		return
 	}
 	if res > 0 {
-		p := dl.name if is_abs(dl.name) else path_join(dl.dir, dl.name)
+		nm := clean_path(dl.name)
+		if len(nm) == 0 do return
+		p := nm if is_abs(nm) else path_join(dl.dir, nm)
 		if p[0] == '~' do p = path_join(home_dir(), p[1:])
 		if dir_exists(p) {
 			set_str(&dl.dir, p)
@@ -572,74 +593,27 @@ draw_file_dialog :: proc(d: ^Doc) {
 
 @(private = "file")
 draw_part_picker :: proc(d: ^Doc) {
-	dl := &app.dlg
-	b := dialog_frame(640, 560)
-	title(&b, "Place a part")
-	sr := row(&b)
-	if live_field("dlg.search", sr, &dl.search, "search: name, description, key …") do dl.pick = 0
-	bot := cut_bottom(&b, fs() + 16)
-	cut_bottom(&b, 8)
-	q := lower(strings.trim_space(dl.search))
-	list := make([dynamic]^Symbol, context.temp_allocator)
-	for s in symbols_by_category() {
-		if len(q) == 0 || strings.contains(lower(s.name), q) || strings.contains(lower(s.desc), q) || strings.contains(lower(s.category), q) || lower(s.key) == q do append(&list, s)
-	}
-	if key(.DOWN) do dl.pick = min(dl.pick + 1, len(list) - 1)
-	if key(.UP) do dl.pick = max(dl.pick - 1, 0)
-	stroke_round(b, th.border, 4)
-	lr := r_inset(b, 2)
-	ih := fs() + 10
-	// keep the picked row visible
-	sid := id_of("dlg.parts")
-	if f32(dl.pick) * ih < ui.scroll[sid] do ui.scroll[sid] = f32(dl.pick) * ih
-	if f32(dl.pick + 1) * ih > ui.scroll[sid] + lr.h do ui.scroll[sid] = f32(dl.pick + 1) * ih - lr.h
-	sc := scroll_begin("dlg.parts", lr)
-	y := lr.y - sc
-	chosen: ^Symbol
-	cat := ""
-	for s, i in list {
-		ir := Rect{lr.x, y, lr.w, ih}
-		y += ih
-		if i == dl.pick do fill(ir, th.sel)
-		if hover(ir) {
-			if i != dl.pick do fill(ir, th.hover)
-			if ui.pressed[0] {
-				dl.pick = i
-				if ui.double do chosen = s
-			}
+	// as loomer: a dialog in the main window, with a button that moves it into its own window
+	b := dialog_frame(720, 640)
+	tr := b
+	tr.h = fs(1.25) + 8
+	sep := "Separate window"
+	if button("dlg.sepwin", cut_right(&tr, text_w(sep) + 30), sep, tip = "Show the parts in a window of their own that you can move to another screen and resize. spicy remembers where you put it.") {
+		pref_put_bool("parts-own-window", true)
+		if parts_window_open() {
+			dialog_close()
+			return
 		}
-		k := action_keys_text(tcat("place/", s.name))
-		text_in(ir, s.desc, th.fg, 0, 0, 10)
-		text_in(ir, tcat(s.category, "   ", k), th.muted, 2, fs(0.9), 10)
-		_ = cat
+		pref_put_bool("parts-own-window", false)
+		status("could not open a separate window for the parts", true)
 	}
-	scroll_end("dlg.parts", lr, f32(len(list)) * ih)
-	if button("dlg.import", cut_left(&bot, text_w("Import SPICE model…") + 30), "Import SPICE model…") {
+	title(&b, "Place a part")
+	bot := cut_bottom(&b, fs() + 16)
+	if parts_panel(b, d) {
 		dialog_close()
-		app.import_for = -1
-		dialog_open(.Import_Model)
 		return
 	}
-	cut_left(&bot, 6)
-	if button("dlg.newsym", cut_left(&bot, text_w("New symbol…") + 30), "New symbol…") {
-		dialog_close()
-		symed_open(nil)
-		return
-	}
-	cut_left(&bot, 6)
-	if button("dlg.editsym", cut_left(&bot, text_w("Edit symbol…") + 30), "Edit symbol…", dl.pick < len(list) && list[dl.pick].kind == .Part) {
-		s := list[dl.pick]
-		dialog_close()
-		symed_open(s)
-		return
-	}
-	res := buttons(&bot, "Place", true, len(list) > 0)
-	if res > 0 && dl.pick < len(list) do chosen = list[dl.pick]
-	if res < 0 do dialog_close()
-	if chosen != nil {
-		dialog_close()
-		place_symbol(d, chosen)
-	}
+	if button("dlg.close", cut_right(&bot, 100 * ui_scale), "Close") || key_pressed(.ESCAPE) do dialog_close()
 }
 
 @(private = "file")
@@ -981,6 +955,7 @@ draw_text_view :: proc() {
 	sz := fs(0.95)
 	lines := split_lines(dl.text)
 	sc := scroll_begin("dlg.view", lr)
+	selectable_begin("dlg.view.sel", lr, sc, dl.text)
 	for l, i in lines {
 		y := lr.y + f32(i) * (sz + 4) - sc
 		if y < lr.y - sz || y > lr.y + lr.h do continue
@@ -991,6 +966,7 @@ draw_text_view :: proc() {
 		else if strings.has_prefix(l, "*") do col = th.muted
 		draw_mono(l, lr.x, y, col, sz)
 	}
+	selectable_end()
 	scroll_end("dlg.view", lr, f32(len(lines)) * (sz + 4) + 10)
 	if button("dlg.copy", cut_left(&bot, 100 * ui_scale), "Copy") {
 		rl.SetClipboardText(cstr(dl.text))
@@ -1015,6 +991,7 @@ draw_shortcuts :: proc() {
 	ih := fs() + 8
 	q := lower(dl.search)
 	sc := scroll_begin("dlg.keys", lr)
+	selectable_begin("dlg.keys.sel", lr, sc)
 	y := lr.y - sc
 	n := 0
 	for a in actions {
@@ -1026,6 +1003,7 @@ draw_shortcuts :: proc() {
 		text_in(ir, a.desc if len(a.desc) > 0 else a.name, th.fg, 0, 0, 6)
 		text_in(ir, action_keys_text(a.name), th.accent, 2, 0, 12)
 	}
+	selectable_end()
 	scroll_end("dlg.keys", lr, f32(n) * ih)
 	if len(shortcut_errors) > 0 do text_in(bot, shortcut_errors[0], th.err, 0, fs(0.9), 0)
 	if buttons(&bot, "Close", false) != 0 do dialog_close()
@@ -1073,7 +1051,9 @@ draw_message :: proc() {
 	title(&b, dl.title)
 	bot := cut_bottom(&b, fs() + 16)
 	sc := scroll_begin("dlg.msg", b)
+	selectable_begin("dlg.msg.sel", b, sc)
 	used := draw_wrapped(dl.text, {b.x, b.y - sc, b.w - 10, b.h}, th.fg)
+	selectable_end()
 	scroll_end("dlg.msg", b, used)
 	if button("dlg.copy", cut_left(&bot, 100 * ui_scale), "Copy") do rl.SetClipboardText(cstr(dl.text))
 	if buttons(&bot, "OK", false) != 0 {
@@ -1087,7 +1067,9 @@ draw_about :: proc() {
 	b := dialog_frame(620, 400)
 	title(&b, tcat("spicy ", SPICY_VERSION))
 	bot := cut_bottom(&b, fs() + 16)
+	selectable_begin("dlg.about.sel", b)
 	draw_wrapped(about_text(), b, th.fg)
+	selectable_end()
 	if button("dlg.repo", cut_left(&bot, 150 * ui_scale), "Open repository") && !open_external(SPICY_REPO) do status(tcat("cannot open ", SPICY_REPO), true)
 	cut_left(&bot, 8)
 	if button("dlg.issue", cut_left(&bot, 150 * ui_scale), "Report an issue") && !open_external(SPICY_ISSUES) do status(tcat("cannot open ", SPICY_ISSUES), true)
@@ -1107,11 +1089,13 @@ draw_diagnostics :: proc() {
 	sz := fs(0.95)
 	lines := split_lines(dl.text)
 	sc := scroll_begin("dlg.diag", lr)
+	selectable_begin("dlg.diag.sel", lr, sc, dl.text)
 	for l, i in lines {
 		y := lr.y + f32(i) * (sz + 4) - sc
 		if y < lr.y - sz || y > lr.y + lr.h do continue
 		draw_mono(l, lr.x, y, th.fg if len(l) > 0 && l[0] == ' ' else th.accent, sz)
 	}
+	selectable_end()
 	scroll_end("dlg.diag", lr, f32(len(lines)) * (sz + 4) + 10)
 	if button("dlg.copy", cut_left(&bot, 100 * ui_scale), "Copy") {
 		rl.SetClipboardText(cstr(dl.text))

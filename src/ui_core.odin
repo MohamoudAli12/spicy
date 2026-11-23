@@ -160,12 +160,14 @@ draw_text :: proc(s: string, x, y: f32, col: Color, size: f32 = 0) {
 	if len(s) == 0 do return
 	sz := size if size > 0 else fs()
 	note_glyphs(s)
+	tsel_record(s, x, y, sz, false)
 	rl.DrawTextEx(get_font(sz), cstr(s), {math.round(x), math.round(y)}, sz, 0, rlc(col))
 }
 
 draw_mono :: proc(s: string, x, y: f32, col: Color, size: f32) {
 	if len(s) == 0 do return
 	note_glyphs(s)
+	tsel_record(s, x, y, size, true)
 	rl.DrawTextEx(get_font_of(&mono, size), cstr(s), {math.round(x), math.round(y)}, size, 0, rlc(col))
 }
 
@@ -192,12 +194,41 @@ fit_text :: proc(s: string, w: f32, size: f32 = 0) -> string {
 }
 
 fill :: proc(r: Rect, c: Color) {rl.DrawRectangleRec(rlr(r), rlc(c))}
+// Rounded rectangles as in loomer (FlatLaf): the radius is in UI units (it grows with the UI
+// scale), the corners are smooth and the edges sit on whole pixels.
 fill_round :: proc(r: Rect, c: Color, rad: f32 = 4) {
-	rl.DrawRectangleRounded(rlr(r), rad * 2 / max(min(r.w, r.h), 1), 6, rlc(c))
+	if c[3] == 0 || r.w <= 0 || r.h <= 0 do return
+	q := snap_rect(r)
+	rr := min(rad * ui_scale, q.w / 2, q.h / 2)
+	if rr <= 0.5 {
+		rl.DrawRectangleRec(rlr(q), rlc(c))
+		return
+	}
+	rl.DrawRectangleRounded(rlr(q), 2 * rr / min(q.w, q.h), 8, rlc(c))
+}
+
+// The rectangle with its edges on whole pixels.
+snap_rect :: proc(r: Rect) -> Rect {
+	x0, y0 := math.round(r.x), math.round(r.y)
+	return {x0, y0, math.round(r.x + r.w) - x0, math.round(r.y + r.h) - y0}
 }
 stroke :: proc(r: Rect, c: Color, t: f32 = 1) {rl.DrawRectangleLinesEx(rlr(r), t, rlc(c))}
 stroke_round :: proc(r: Rect, c: Color, rad: f32 = 4, t: f32 = 1) {
-	rl.DrawRectangleRoundedLinesEx(rlr(r), rad * 2 / max(min(r.w, r.h), 1), 6, t, rlc(c))
+	if c[3] == 0 || r.w <= 0 || r.h <= 0 do return
+	q := snap_rect(r)
+	tt := max(math.round(t), 1)
+	q = {q.x + tt / 2, q.y + tt / 2, q.w - tt, q.h - tt} // the line inside the rectangle, crisp
+	rr := min(rad * ui_scale, q.w / 2, q.h / 2)
+	if rr <= 0.5 {
+		rl.DrawRectangleLinesEx(rlr({q.x - tt / 2, q.y - tt / 2, q.w + tt, q.h + tt}), tt, rlc(c))
+		return
+	}
+	rl.DrawRectangleRoundedLinesEx(rlr(q), 2 * rr / min(q.w, q.h), 8, tt, rlc(c))
+}
+
+// Text on the selection colour: white or black, whichever reads better.
+sel_fg :: proc() -> Color {
+	return Color{255, 255, 255, 255} if luma(th.sel) < 0.6 else Color{0x10, 0x10, 0x10, 255}
 }
 line :: proc(x0, y0, x1, y1: f32, c: Color, t: f32 = 1) {rl.DrawLineEx({x0, y0}, {x1, y1}, t, rlc(c))}
 
@@ -309,6 +340,7 @@ UI_State :: struct {
 	popup_open_frame: bool,
 	block:        bool, // mouse over a popup
 	modal:        bool, // a dialog is open
+	tsel:         Tsel_State, // the selection in read-only text (textsel.odin)
 	in_modal:     bool, // drawing the dialog now
 	tip:          string,
 	tip_id:       u64,
@@ -442,13 +474,14 @@ button :: proc(id_s: string, r: Rect, text: string, enabled := true, primary := 
 		if ui.pressed[0] do ui.active = id
 		if len(tip) > 0 do tooltip(id, tip)
 	}
-	bg := th.input
+	// as loomer: a filled rounded button with a thin border; hover and press darken it a little
+	bg := mix(th.bg, th.fg, 0.13) if th.dark else th.input
 	if primary do bg = th.accent
-	if selected do bg = th.sel
-	if h do bg = mix(bg, th.fg, 0.12)
-	if ui.active == id && h do bg = mix(bg, th.fg, 0.2)
+	if selected do bg = mix(th.bg, th.accent, 0.45)
+	if ui.active == id && h do bg = mix(bg, th.fg, 0.15)
+	else if h do bg = mix(bg, th.fg, 0.07)
 	fill_round(r, bg, 4)
-	if !primary do stroke_round(r, th.border, 4)
+	stroke_round(r, th.accent if primary || selected else th.border, 4)
 	col := th.accent_fg if primary else th.fg
 	if !enabled do col = th.muted
 	text_in(r, fit_text(text, r.w - 8), col, 1)
@@ -490,12 +523,14 @@ draw_icon :: proc(icon: Icon, cx, cy, s: f32, col: Color) {
 
 // Menu text: a leading "✓ " is drawn as a check icon (the font may not have ✓).
 menu_text :: proc(r: Rect, label: string, col: Color, pad: f32) {
+	// as loomer: a dot for the chosen item, a ring for the other choices
 	if strings.has_prefix(label, "✓ ") {
-		draw_icon(.Check, r.x + pad + fs(0.45), r.y + r.h / 2, fs(0.75), col)
+		rl.DrawCircleV({r.x + pad + fs(0.4), r.y + r.h / 2}, fs(0.25), rlc(col))
 		text_in({r.x + fs(1.1), r.y, r.w - fs(1.1), r.h}, label[len("✓ "):], col, 0, 0, pad)
 		return
 	}
 	if strings.has_prefix(label, "   ") {
+		rl.DrawCircleLinesV({r.x + pad + fs(0.4), r.y + r.h / 2}, fs(0.25), rlc(th.muted))
 		text_in({r.x + fs(1.1), r.y, r.w - fs(1.1), r.h}, strings.trim_left(label, " "), col, 0, 0, pad)
 		return
 	}
@@ -511,7 +546,9 @@ tool_button :: proc(id_s: string, r: Rect, text: string, enabled := true, select
 		if ui.pressed[0] do ui.active = id
 		if len(tip) > 0 do tooltip(id, tip)
 	}
-	if selected do fill_round(r, th.sel, 4)
+	// flat until hovered (loomer)
+	if selected do fill_round(r, mix(th.bar, th.accent, 0.35), 4)
+	if h && ui.active == id && ui.down[0] do fill_round(r, th.pressed, 4)
 	else if h do fill_round(r, th.hover, 4)
 	c := col if col[3] != 0 else th.fg
 	if !enabled do c = th.muted
@@ -538,7 +575,7 @@ checkbox :: proc(id_s: string, r: Rect, text: string, v: ^bool) -> bool {
 	bs := fs(1.05)
 	b := Rect{r.x + 2, r.y + (r.h - bs) / 2, bs, bs}
 	fill_round(b, th.accent if v^ else th.input, 3)
-	stroke_round(b, th.border, 3)
+	stroke_round(b, th.accent if v^ || h else th.border, 3)
 	if v^ {
 		line(b.x + bs * 0.22, b.y + bs * 0.52, b.x + bs * 0.42, b.y + bs * 0.72, th.accent_fg, 2)
 		line(b.x + bs * 0.42, b.y + bs * 0.72, b.x + bs * 0.78, b.y + bs * 0.3, th.accent_fg, 2)
@@ -912,12 +949,13 @@ combo :: proc(id_s: string, r: Rect, items: []string, sel: ^int, enabled := true
 		ui.hot = id
 		ui.cursor = .POINTING_HAND
 	}
-	fill_round(r, mix(th.input, th.fg, 0.06) if h else th.input, 3)
-	stroke_round(r, th.border, 3)
+	// as loomer: rounded, the accent border while its list is open
+	fill_round(r, mix(th.input, th.fg, 0.05) if h else th.input, 4)
+	stroke_round(r, th.accent if ui.popup_id == id else th.border, 4)
 	cur := items[sel^] if sel^ >= 0 && sel^ < len(items) else ""
 	text_in({r.x, r.y, r.w - 18, r.h}, fit_text(cur, r.w - 26), th.fg if enabled else th.muted)
-	ax, ay := r.x + r.w - 12, r.y + r.h / 2
-	rl.DrawTriangle({ax - 4, ay - 2}, {ax, ay + 3}, {ax + 4, ay - 2}, rlc(th.muted))
+	ax, ay, k := r.x + r.w - 12 * ui_scale, r.y + r.h / 2, 3.5 * ui_scale
+	rl.DrawTriangle({ax - k, ay - k * 0.5}, {ax, ay + k * 0.7}, {ax + k, ay - k * 0.5}, rlc(th.muted))
 	if h && ui.pressed[0] && ui.popup_id != id {
 		ih := fs() + 10
 		ph := min(f32(len(items)) * ih + 6, 420)
@@ -995,9 +1033,9 @@ draw_popup :: proc() {
 	if ui.popup_id == 0 do return
 	r := ui.popup_rect
 	ih := fs() + 10
-	fill_round({r.x + 3, r.y + 4, r.w, r.h}, th.shadow, 5)
-	fill_round(r, th.popup, 5)
-	stroke_round(r, th.border, 5)
+	fill_round({r.x + 3, r.y + 3, r.w, r.h}, th.shadow, 6)
+	fill_round(r, th.popup, 6)
+	stroke_round(r, th.border, 6)
 	sc := ui.scroll[ui.popup_id]
 	total: f32 = 6
 	for it in ui.popup_items do total += (8 if it == "-" else ih)
@@ -1031,7 +1069,7 @@ draw_popup :: proc() {
 			y += 8
 			continue
 		}
-		ir := Rect{r.x + 3, y, r.w - 6, ih}
+		ir := Rect{r.x + 4 * ui_scale, y, r.w - 8 * ui_scale, ih}
 		y += ih
 		label, short := menu_split(it)
 		disabled := strings.has_prefix(label, "~")
@@ -1052,18 +1090,19 @@ draw_popup :: proc() {
 			ui.sub_open = i
 		} else if hv && !is_sub do ui.sub_open = -1
 		open_here := is_sub && ui.sub_open == i
-		if hv || open_here do fill_round(ir, th.accent, 3)
-		else if i == ui.popup_sel do fill_round(ir, th.sel, 3)
-		col := th.accent_fg if hv || open_here else (th.muted if disabled else th.fg)
+		// a soft rounded highlight (loomer): the selection colour, not the accent
+		if hv || open_here do fill_round(ir, th.sel, 4)
+		else if i == ui.popup_sel do fill_round(ir, th.hover, 4)
+		col := sel_fg() if hv || open_here else (th.muted if disabled else th.fg)
 		menu_text(ir, label, col, 10)
 		if is_sub {
 			// a small right-pointing triangle
-			c := rlc(th.accent_fg if hv || open_here else th.muted)
+			c := rlc(sel_fg() if hv || open_here else th.muted)
 			ax := ir.x + ir.w - 12
 			ay := ir.y + ir.h / 2
 			k := fs(0.28)
 			rl.DrawTriangle({ax - k, ay - k * 1.2}, {ax - k, ay + k * 1.2}, {ax + k, ay}, c)
-		} else if len(short) > 0 do text_in(ir, short, th.accent_fg if hv || open_here else th.muted, 2, fs(0.9), 10)
+		} else if len(short) > 0 do text_in(ir, short, sel_fg() if hv || open_here else th.muted, 2, fs(0.9), 10)
 		if hv && !is_sub && ui.released[0] && !ui.popup_open_frame {
 			ui.popup_result = i
 			ui.popup_result_id = ui.popup_id
@@ -1078,9 +1117,9 @@ draw_popup :: proc() {
 	if ui.sub_open >= 0 && ui.popup_id != 0 {
 		// the open submenu
 		sr := ui.sub_rect
-		fill_round({sr.x + 3, sr.y + 4, sr.w, sr.h}, th.shadow, 5)
-		fill_round(sr, th.popup, 5)
-		stroke_round(sr, th.border, 5)
+		fill_round({sr.x + 3, sr.y + 3, sr.w, sr.h}, th.shadow, 6)
+		fill_round(sr, th.popup, 6)
+		stroke_round(sr, th.border, 6)
 		push_clip(sr)
 		sy := sr.y + 3
 		for it, j in ui.sub_items {
@@ -1089,13 +1128,13 @@ draw_popup :: proc() {
 				sy += 8
 				continue
 			}
-			ir := Rect{sr.x + 3, sy, sr.w - 6, ih}
+			ir := Rect{sr.x + 4 * ui_scale, sy, sr.w - 8 * ui_scale, ih}
 			sy += ih
 			label, short := menu_split(it)
 			hv := r_contains(ir, ui.mouse)
-			if hv do fill_round(ir, th.accent, 3)
-			menu_text(ir, label, th.accent_fg if hv else th.fg, 10)
-			if len(short) > 0 do text_in(ir, short, th.accent_fg if hv else th.muted, 2, fs(0.9), 10)
+			if hv do fill_round(ir, th.sel, 4)
+			menu_text(ir, label, sel_fg() if hv else th.fg, 10)
+			if len(short) > 0 do text_in(ir, short, sel_fg() if hv else th.muted, 2, fs(0.9), 10)
 			if hv && ui.released[0] && !ui.popup_open_frame {
 				ui.popup_result = ui.sub_open
 				ui.sub_result = j
@@ -1132,9 +1171,11 @@ draw_tooltip :: proc() {
 	y := ui.mouse.y + 20
 	if y + h > screen_h() do y = ui.mouse.y - h - 6
 	r := Rect{x, y, w, h}
-	bg := mix(th.bg, th.fg, 0.85) if th.dark else Color{40, 40, 40, 245}
-	fill_round(r, bg, 4)
-	for l, i in lines do draw_text(l, x + 8, y + 5 + f32(i) * (sz + 4), th.bg if th.dark else Color{255, 255, 255, 255}, sz)
+	// as loomer: a small rounded popup with a border and a shadow
+	fill_round({r.x + 2, r.y + 2, r.w, r.h}, th.shadow, 4)
+	fill_round(r, th.popup, 4)
+	stroke_round(r, th.border, 4)
+	for l, i in lines do draw_text(l, x + 8, y + 5 + f32(i) * (sz + 4), th.fg, sz)
 	ui.tip = ""
 }
 

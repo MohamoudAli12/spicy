@@ -84,29 +84,31 @@ derive :: proc(t: ^Theme, bg, fg, ac: Color) {
 	t.dark = dark
 	white := Color{255, 255, 255, 255}
 	black := Color{0, 0, 0, 255}
+	black_text := Color{0x10, 0x10, 0x10, 255}
 	t.bg = bg
 	t.fg = fg
 	t.accent = ac
-	t.panel = mix(bg, fg, 0.03)
+	// the same rules as zapped and loomer (one look for all three apps)
+	t.panel = mix(bg, fg, 0.03) if dark else mix(bg, white, 0.4)
 	t.bar = mix(bg, fg, 0.06) if dark else mix(bg, black, 0.03)
-	t.muted = mix(bg, fg, 0.6)
-	t.accent_fg = white if luma(ac) < 0.65 else black
+	t.muted = mix(bg, fg, 0.6 if dark else 0.55)
+	t.accent_fg = black_text if luma(ac) > 0.667 else white
 	t.input = mix(bg, black, 0.25) if dark else white
-	t.border = mix(bg, fg, 0.2)
+	t.border = mix(bg, fg, 0.2 if dark else 0.25)
 	t.hover = mix(bg, fg, 0.12 if dark else 0.08)
-	t.pressed = mix(bg, fg, 0.2)
+	t.pressed = mix(bg, fg, 0.2 if dark else 0.16)
 	t.sel = mix(bg, ac, 0.45 if dark else 0.3)
 	t.warn = {0xE5, 0xA5, 0x0A, 255} if dark else {0xB4, 0x6E, 0x00, 255}
 	t.ok = {0x34, 0xC7, 0x59, 255} if dark else {0x0E, 0x8A, 0x3C, 255}
-	t.err = {0xFF, 0x5A, 0x4F, 255} if dark else {0xD0, 0x1E, 0x1E, 255}
+	t.err = {0xFF, 0x45, 0x3A, 255} if dark else {0xD0, 0x1E, 0x1E, 255}
 	t.popup = mix(bg, fg, 0.05)
 	t.shadow = {0, 0, 0, 90}
 
-	t.s_bg = mix(bg, black, 0.25) if dark else mix(bg, white, 0.7)
-	t.s_grid = mix(t.s_bg, fg, 0.18)
+	t.s_bg = mix(bg, black, 0.18) if dark else mix(bg, white, 0.6)
+	t.s_grid = mix(t.s_bg, fg, 0.14)
 	t.s_grid_major = mix(t.s_bg, fg, 0.3)
-	t.s_wire = ac
-	t.s_symbol = fg
+	t.s_wire = mix(ac, white, 0.15) if dark else mix(ac, black, 0.2)
+	t.s_symbol = mix(fg, white, 0.5) if dark else mix(fg, black, 0.4)
 	t.s_symbol_fill = {0, 0, 0, 0}
 	t.s_pin = {0xE0, 0x40, 0x40, 255}
 	t.s_junction = {} // = wire colour (filled in after overrides)
@@ -124,8 +126,8 @@ derive :: proc(t: ^Theme, bg, fg, ac: Color) {
 	t.s_placing = alpha(fg, 170)
 
 	t.w_bg = t.s_bg
-	t.w_plot = mix(t.s_bg, black, 0.2) if dark else white
-	t.w_grid = mix(t.w_plot, fg, 0.12)
+	t.w_plot = mix(bg, black, 0.25) if dark else white
+	t.w_grid = mix(t.w_plot, fg, 0.1)
 	t.w_axis = mix(t.w_plot, fg, 0.35)
 	t.w_text = mix(bg, fg, 0.75)
 	t.w_cursor1 = fg

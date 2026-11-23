@@ -117,8 +117,11 @@ split_lines :: proc(s: string) -> []string {
 }
 
 one_line :: proc(s: string) -> string {
-	t, _ := strings.replace_all(s, "\n", " ", context.temp_allocator)
-	return t
+	// Windows ends lines with \r\n: neither belongs in a one-line field
+	t, _ := strings.replace_all(s, "\r\n", " ", context.temp_allocator)
+	t, _ = strings.replace_all(t, "\n", " ", context.temp_allocator)
+	t, _ = strings.replace_all(t, "\r", " ", context.temp_allocator)
+	return strings.trim_right_space(t)
 }
 
 // Replaces s (a heap string) with a heap copy of v.
