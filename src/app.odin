@@ -346,9 +346,10 @@ on_run_done :: proc(d: ^Doc) {
 		message(tcat(r.sim_name, " failed"), msg)
 		return
 	}
+	// first: the .plot directives may add warnings
+	wave_new_run(&d.wave, r, &d.sch, doc_sim(d))
 	status(r.message)
 	if len(r.warnings) > 0 do status(fmt.tprintf("%s – %d warning%s (View › Simulator log)", r.message, len(r.warnings), "" if len(r.warnings) == 1 else "s"))
-	wave_new_run(&d.wave, r)
 	if S.show_waves != "never" do app.show_waves = true
 	// probe straight away, whatever tool was active (placing parts, drawing wires …),
 	// unless the user is in the middle of a drag or a dialog

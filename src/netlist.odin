@@ -136,6 +136,7 @@ Netlist :: struct {
 	// (Xyce's -r raw file has no device currents: no I(R1)), and what that line prints
 	xyce_print: string,
 	xyce_vars:  string,
+	plot_traces: []string, // the expressions of the .plot directives: shown after the run
 }
 
 // Directive blocks can be limited to one simulator or dialect with a first line such as
@@ -255,6 +256,8 @@ netlist_build :: proc(s: ^Schematic, sim: ^Simulator_Def, title: string, base_di
 	nl.dialect = sim.dialect
 	nl.nets = nets_build(s, S.net_prefix)
 	for w in nl.nets.warnings do append(&nl.warnings, w)
+	nl.plot_traces = plot_requests(s, sim)
+	plot_validate(&nl, s)
 	if sim.dialect == "vacask" {
 		nl.text = netlist_vacask(&nl, s, sim, title)
 	} else {
@@ -286,7 +289,10 @@ directive_lines :: proc(s: ^Schematic, sim: ^Simulator_Def) -> []string {
 		if !t.directive do continue
 		body, ok := directive_for(t.text, sim)
 		if !ok do continue
-		for l in split_lines(body) do if !is_blank(l) do append(&out, strings.trim_right_space(l))
+		for l in split_lines(body) {
+			if _, is_plot := plot_line_args(l); is_plot do continue // for the waveform viewer, not the simulator
+			if !is_blank(l) do append(&out, strings.trim_right_space(l))
+		}
 	}
 	return out[:]
 }

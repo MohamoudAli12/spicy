@@ -41,6 +41,7 @@ Symbols, models and default settings are built into the binary, so nothing else 
 - AC results as Bode plots (magnitude in dB + phase), magnitude, phase or real/imaginary.
 - Fast with very long traces (min/max decimation).
 - Switch between analyses of a run (op, tran, ac, …) with **Tab**.
+- **`.plot` directive:** `.plot V(out), I(R1)` in a SPICE directive shows those traces after every run, in the analysis they belong to. The line is checked before the run: syntax, and that the nets and parts it names exist in the schematic.
 - **Pop-out window** (**Ctrl+Shift+W**): waveforms in their own window, e.g. on a second monitor or full screen.
 - Export the traces to CSV.
 

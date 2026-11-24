@@ -396,13 +396,15 @@ wave_next_plot :: proc(w: ^Wave_View, r: ^Run) {
 }
 
 // A run finished: show its results.
-wave_new_run :: proc(w: ^Wave_View, r: ^Run) {
+wave_new_run :: proc(w: ^Wave_View, r: ^Run, sch: ^Schematic, sim: ^Simulator_Def) {
 	if !S.w_keep_traces do wave_clear(w)
 	// the same kind of analysis as before, else the first that is not an operating point
 	idx := -1
 	if len(w.plot_kind) > 0 do for &p, i in r.plots do if plot_kind(&p) == w.plot_kind && idx < 0 do idx = i
 	if idx < 0 do for &p, i in r.plots do if plot_kind(&p) != "op" && p.npoints > 1 && idx < 0 do idx = i
 	if idx < 0 && len(r.plots) > 0 do idx = 0
+	// .plot directives: the analysis they can be shown in
+	idx = plot_pick(r, sch, sim, idx)
 	kind_changed := idx >= 0 && plot_kind(&r.plots[idx]) != w.plot_kind
 	w.plot_idx = idx
 	if idx >= 0 do set_str(&w.plot_kind, plot_kind(&r.plots[idx]))
@@ -415,6 +417,7 @@ wave_new_run :: proc(w: ^Wave_View, r: ^Run) {
 		p.auto_y = true
 		if p.fft != nil do p.fft.ax.auto_x = true
 	}
+	for e in r.plot_traces do wave_add_trace(w, e, false)
 }
 
 // Re-evaluates every trace against the current plot.

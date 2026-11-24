@@ -32,6 +32,7 @@ Run :: struct {
 	net_text:   string,
 	warnings:   [dynamic]string,
 	op:         map[string]f64, // net name (lower) -> voltage, from an operating point plot
+	plot_traces: [dynamic]string, // .plot directives: shown in the waveform viewer when the run is done
 }
 
 run_free :: proc(r: ^Run) {
@@ -44,6 +45,8 @@ run_free :: proc(r: ^Run) {
 	delete(r.warnings)
 	for k in r.op do delete(k)
 	delete(r.op)
+	for s in r.plot_traces do delete(s)
+	delete(r.plot_traces)
 	r^ = {}
 }
 
@@ -92,6 +95,7 @@ run_start :: proc(r: ^Run, sch: ^Schematic, doc_path: string, doc_id: int, sim: 
 	}
 	r.net_text = strings.clone(nl.text)
 	for w in nl.warnings do append(&r.warnings, strings.clone(w))
+	for e in nl.plot_traces do append(&r.plot_traces, strings.clone(e))
 	if len(nl.errors) > 0 {
 		r.state = .Failed
 		r.message = strings.clone(strings.join(nl.errors[:], "\n", context.temp_allocator))

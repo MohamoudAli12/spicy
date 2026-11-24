@@ -159,13 +159,11 @@ parse_unary :: proc(p: ^Parser) -> Expr_Val {
 	return a
 }
 
-@(private = "file")
 is_ident :: proc(c: u8) -> bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '@' || c == '#' || c == '.' || c == ':' || c == '[' || c == ']' || c == '$'
 }
 
 // Text of a balanced (…) starting at p.src[start] == '('; returns the end index after ')'.
-@(private = "file")
 match_paren :: proc(s: string, start: int) -> int {
 	depth := 0
 	for i in start ..< len(s) {
@@ -229,7 +227,7 @@ parse_primary :: proc(p: ^Parser) -> Expr_Val {
 			}
 			return a
 		}
-		if len(lname) >= 1 && lname[0] == 'i' && !is_func(lname) {
+		if len(lname) >= 1 && lname[0] == 'i' && !is_func(lname) && lname != "if" {
 			p.pos = end
 			return probe_current(p, lname[1:], strings.trim_space(inner))
 		}
@@ -257,9 +255,8 @@ parse_primary :: proc(p: ^Parser) -> Expr_Val {
 }
 
 @(private = "file")
-FUNCS := [?]string{"abs", "sqrt", "exp", "ln", "log", "log10", "db", "mag", "ph", "phase", "re", "real", "im", "imag", "sin", "cos", "tan", "atan", "d", "min", "max", "int", "if"}
+FUNCS := [?]string{"abs", "sqrt", "exp", "ln", "log", "log10", "db", "mag", "ph", "phase", "re", "real", "im", "imag", "sin", "cos", "tan", "atan", "d", "min", "max", "int"}
 
-@(private = "file")
 is_func :: proc(n: string) -> bool {
 	for f in FUNCS do if f == n do return true
 	return false
