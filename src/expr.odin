@@ -33,7 +33,7 @@ Eval_Result :: struct {
 expr_eval :: proc(src: string, plot: ^Plot, sch: ^Schematic, sim: ^Simulator_Def) -> Eval_Result {
 	ctx := Expr_Ctx{plot = plot, sch = sch, sim = sim, n = plot.npoints}
 	p := Parser{src = src, ctx = &ctx}
-	v := parse_sum(&p)
+	v := parse_expr(&p)
 	skip_ws(&p)
 	if len(ctx.err) == 0 && p.pos < len(p.src) do ctx.err = fmt.tprintf("unexpected \"%s\"", p.src[p.pos:])
 	if len(ctx.err) > 0 do return {err = strings.clone(ctx.err)}
@@ -95,19 +95,12 @@ binop :: proc(p: ^Parser, a, b: Expr_Val, op: u8) -> Expr_Val {
 	}
 	unit := ""
 	switch op {
-	case '+', '-': unit = a.unit if a.unit == b.unit || len(b.unit) == 0 else (b.unit if len(a.unit) == 0 else "")
-	case '*':
-		switch {
-		case len(a.unit) == 0: unit = b.unit
-		case len(b.unit) == 0: unit = a.unit
-		case (a.unit == "V" && b.unit == "A") || (a.unit == "A" && b.unit == "V"): unit = "W"
-		}
-	case '/':
-		switch {
-		case len(b.unit) == 0: unit = a.unit
-		case a.unit == "V" && b.unit == "A": unit = "Ω"
-		case a.unit == "A" && b.unit == "V": unit = "S"
-		}
+	case '+', '-': unit = unit_sum(a.unit, b.unit)
+	case '*': unit = unit_mul(a.unit, b.unit)
+	case '/': unit = unit_div(a.unit, b.unit)
+	case '^':
+		// a power of a unit needs a plain-number exponent: V(out)^2 is in V²
+		if len(b.v) == 1 && len(b.unit) == 0 && imag(b.v[0]) == 0 do unit = unit_pow(a.unit, real(b.v[0]))
 	}
 	return {v = out, unit = unit}
 }
@@ -123,6 +116,53 @@ parse_sum :: proc(p: ^Parser) -> Expr_Val {
 		a = binop(p, a, b, c)
 	}
 	return a
+}
+
+// A comparison of two sums: 1 where it holds, 0 where not. It binds weaker than + - * /, and
+// compares real parts (use mag() or db() of a complex trace to compare its size).
+@(private = "file")
+parse_expr :: proc(p: ^Parser) -> Expr_Val {
+	a := parse_sum(p)
+	op := cmp_op(p)
+	if len(op) == 0 do return a
+	b := parse_sum(p)
+	return cmp_val(a, b, op)
+}
+
+// The comparison operator at the cursor, consumed; "" when there is none.
+@(private = "file")
+cmp_op :: proc(p: ^Parser) -> string {
+	c := peek(p)
+	if c != '<' && c != '>' && c != '=' && c != '!' do return ""
+	rest := p.src[p.pos:]
+	for op in ([?]string{"<=", ">=", "==", "!=", "<", ">"}) {
+		if strings.has_prefix(rest, op) {
+			p.pos += len(op)
+			return op
+		}
+	}
+	return ""
+}
+
+@(private = "file")
+cmp_val :: proc(a, b: Expr_Val, op: string) -> Expr_Val {
+	n := max(len(a.v), len(b.v))
+	out := make([]complex128, n, context.temp_allocator)
+	for i in 0 ..< n {
+		x := real(a.v[0] if len(a.v) == 1 else a.v[i])
+		y := real(b.v[0] if len(b.v) == 1 else b.v[i])
+		holds := false
+		switch op {
+		case "<": holds = x < y
+		case ">": holds = x > y
+		case "<=": holds = x <= y
+		case ">=": holds = x >= y
+		case "==": holds = x == y
+		case "!=": holds = x != y
+		}
+		out[i] = complex(1.0 if holds else 0.0, 0)
+	}
+	return {v = out}
 }
 
 @(private = "file")
@@ -189,7 +229,7 @@ parse_primary :: proc(p: ^Parser) -> Expr_Val {
 	if c == 0 do return fail(p, "expression ends too early")
 	if c == '(' {
 		p.pos += 1
-		v := parse_sum(p)
+		v := parse_expr(p)
 		if peek(p) != ')' do return fail(p, "missing )")
 		p.pos += 1
 		return v
@@ -199,7 +239,9 @@ parse_primary :: proc(p: ^Parser) -> Expr_Val {
 		for p.pos < len(p.src) && (is_ident(p.src[p.pos]) || ((p.src[p.pos] == '+' || p.src[p.pos] == '-') && (p.src[p.pos - 1] == 'e' || p.src[p.pos - 1] == 'E'))) do p.pos += 1
 		x, ok := parse_eng(p.src[start:p.pos])
 		if !ok do return fail(p, fmt.tprintf("bad number \"%s\"", p.src[start:p.pos]))
-		return const_val(x)
+		cv := const_val(x)
+		cv.unit = number_unit(p.src[start:p.pos])
+		return cv
 	}
 	if !is_ident(c) do return fail(p, fmt.tprintf("unexpected \"%c\"", c))
 	start := p.pos
@@ -236,7 +278,7 @@ parse_primary :: proc(p: ^Parser) -> Expr_Val {
 		args := make([dynamic]Expr_Val, context.temp_allocator)
 		if peek(p) != ')' {
 			for {
-				append(&args, parse_sum(p))
+				append(&args, parse_expr(p))
 				if peek(p) == ',' {p.pos += 1; continue}
 				break
 			}
@@ -255,7 +297,7 @@ parse_primary :: proc(p: ^Parser) -> Expr_Val {
 }
 
 @(private = "file")
-FUNCS := [?]string{"abs", "sqrt", "exp", "ln", "log", "log10", "db", "mag", "ph", "phase", "re", "real", "im", "imag", "sin", "cos", "tan", "atan", "d", "min", "max", "int"}
+FUNCS := [?]string{"abs", "sqrt", "exp", "ln", "log", "log10", "db", "mag", "ph", "phase", "re", "real", "im", "imag", "sin", "cos", "tan", "atan", "d", "min", "max", "int", "if"}
 
 is_func :: proc(n: string) -> bool {
 	for f in FUNCS do if f == n do return true
@@ -264,6 +306,7 @@ is_func :: proc(n: string) -> bool {
 
 @(private = "file")
 call_func :: proc(p: ^Parser, name: string, args: []Expr_Val) -> Expr_Val {
+	if name == "if" do return if_func(p, args)
 	if len(args) == 0 do return fail(p, fmt.tprintf("%s() needs an argument", name))
 	a := args[0]
 	out := make([]complex128, len(a.v), context.temp_allocator)
@@ -279,7 +322,7 @@ call_func :: proc(p: ^Parser, name: string, args: []Expr_Val) -> Expr_Val {
 			y := real(b.v[0] if len(b.v) == 1 else b.v[i])
 			o[i] = complex(min(x, y) if name == "min" else max(x, y), 0)
 		}
-		return {v = o, unit = unit}
+		return {v = o, unit = unit_sum(a.unit, b.unit)}
 	case "d":
 		// derivative with respect to the x axis
 		if len(a.v) == 1 do return const_val(0)
@@ -289,7 +332,7 @@ call_func :: proc(p: ^Parser, name: string, args: []Expr_Val) -> Expr_Val {
 			dx := x[i1] - x[i0]
 			out[i] = (a.v[i1] - a.v[i0]) / complex(dx, 0) if dx != 0 else 0
 		}
-		return {v = out, unit = tcat(unit, "/s") if len(unit) > 0 else ""}
+		return {v = out, unit = unit_div(unit, p.ctx.plot.vecs[0].unit)}
 	case "int":
 		if len(a.v) == 1 do return const_val(0)
 		x := p.ctx.plot.vecs[0].re
@@ -298,7 +341,7 @@ call_func :: proc(p: ^Parser, name: string, args: []Expr_Val) -> Expr_Val {
 			if i > 0 do acc += (a.v[i] + a.v[i - 1]) * complex((x[i] - x[i - 1]) / 2, 0)
 			out[i] = acc
 		}
-		return {v = out, unit = tcat(unit, "·s") if len(unit) > 0 else ""}
+		return {v = out, unit = unit_mul(unit, p.ctx.plot.vecs[0].unit)}
 	}
 	for x, i in a.v {
 		r: complex128
@@ -321,11 +364,29 @@ call_func :: proc(p: ^Parser, name: string, args: []Expr_Val) -> Expr_Val {
 		out[i] = r
 	}
 	switch name {
+	case "sqrt": unit = unit_pow(unit, 0.5)
 	case "db": unit = "dB"
 	case "ph", "phase": unit = "°"
 	case "ln", "log", "log10", "exp", "sin", "cos", "tan", "atan": unit = ""
 	}
 	return {v = out, unit = unit}
+}
+
+// if(c, a, b): per point, a where c is nonzero, otherwise b. A one-point argument applies to all
+// points, as for min and max. The unit is that of a and b (unit_sum).
+@(private = "file")
+if_func :: proc(p: ^Parser, args: []Expr_Val) -> Expr_Val {
+	if len(args) != 3 do return fail(p, "if(cond, a, b) needs three arguments. Correct: if(V(out) > 0.5, 1, 0)")
+	c, a, b := args[0], args[1], args[2]
+	n := max(len(c.v), len(a.v), len(b.v))
+	out := make([]complex128, n, context.temp_allocator)
+	for i in 0 ..< n {
+		cv := c.v[0 if len(c.v) == 1 else i]
+		av := a.v[0 if len(a.v) == 1 else i]
+		bv := b.v[0 if len(b.v) == 1 else i]
+		out[i] = av if cv != 0 else bv
+	}
+	return {v = out, unit = unit_sum(a.unit, b.unit)}
 }
 
 // Fills {net} {ref} {cur} {pin} into a probe name template.

@@ -10,7 +10,7 @@ Symbols, models and default settings are built into the binary, so nothing else 
 ### Schematic editor
 - Place parts from a part picker (**F2**) or with single-key shortcuts (`R`, `C`, `L`, …).
 - Wires with Manhattan routing (Space flips the corner). A wire drawn through a part connects to its pins. Dragged parts pull their wires along (rubber-banding).
-- Net labels, grounds, comments and SPICE directives (`.tran`, `.ac`, `.dc`, `.op`, `.param`, …).
+- Net labels, grounds, comments and SPICE directives (`.tran`, `.ac`, `.dc`, `.op`, `.noise`, `.param`, …), plus spicy's own `.plot`, `.meas` and `.step` (see the waveform viewer and simulation sections).
 - Copy, paste, duplicate, rotate and mirror, plus undo/redo (200 levels).
 - Tabs for several open schematics. They reopen at the next start.
 - Net highlighting on hover. Operating-point voltages are shown on the wires after a `.op` run.
@@ -29,19 +29,25 @@ Symbols, models and default settings are built into the binary, so nothing else 
 ### Simulation
 - Supports **ngspice**, **Xyce** and **VACASK**, and you can switch between them with **F7**. spicy translates the netlist to VACASK's own language automatically.
 - Simulations run as a separate process, so a simulator crash can't take spicy down.
+- **`.step param R list 1k 2k 4.7k`** or **`.step param R 1k 10k 1k`** (start, stop, increment): one run per value, with the plots labelled by value, on all three simulators. The start, stop and increment form gives at most 500 values.
+- **`.noise V(out) V1 dec 10 10 1Meg`** works with all three simulators and gives the output and input noise spectral density in V/√Hz (`onoise_spectrum`, `inoise_spectrum`). Show it with `.plot onoise_spectrum`: each analysis shows the `.plot` traces it can evaluate, and **Tab** switches to the others. Xyce runs only its `.noise` analysis per netlist, so spicy warns when other analyses are in the same schematic.
 - Optionally re-run on every save, set a run timeout, add extra libraries or SPICE lines to every netlist.
 - View the generated netlist (**Ctrl+Shift+N**) and the simulator log (**Ctrl+L**).
 - You can add any SPICE-compatible simulator by editing `settings.edn`.
 
 ### Waveform viewer
 - Click a wire to plot its voltage, or click a part to plot its current (probe mode).
-- **Trace expressions:** `V(out)`, `V(a,b)`, `I(R1)`, `Ic(Q1)`, arithmetic, and functions such as `db`, `mag`, `ph`, `abs`, `sqrt`, `ln`, `log10`, `d` (derivative), `min`, `max`.
+- **Trace expressions:** `V(out)`, `V(a,b)`, `I(R1)`, `Ic(Q1)`, arithmetic, comparisons (`<`, `>`, `<=`, `>=`, `==`, `!=`, giving 1 or 0 per point, e.g. `V(out) > 0.5`), and functions such as `db`, `mag`, `ph`, `abs`, `sqrt`, `ln`, `log10`, `d` (derivative), `int` (integral), `min`, `max`, and `if(cond, a, b)`, which gives `a` where `cond` is nonzero and `b` elsewhere, e.g. `if(V(out) > 0.5, V(out), 0)`. Results carry the unit the expression gives (`V(out) * I(R1)` is in W, `int(I(C1))` in C), and a number can carry one after its scale factor: `I(R1) * 1kohm` is in V.
 - Multiple panes, two cursors with readout, markers, box zoom and zoom-back.
 - **FFT:** right-click a transient trace and choose **FFT** to see its spectrum in a new pane. The pane has its own frequency axis and a choice of Hann, Hamming, Blackman, flat-top or rectangular window. Amplitude can be in dB or linear, and the FFT covers the time range you're zoomed into. The defaults are set in `settings.edn` (`:waveform :fft-…`).
 - AC results as Bode plots (magnitude in dB + phase), magnitude, phase or real/imaginary.
 - Fast with very long traces (min/max decimation).
 - Switch between analyses of a run (op, tran, ac, …) with **Tab**.
 - **`.plot` directive:** `.plot V(out), I(R1)` in a SPICE directive shows those traces after every run, in the analysis they belong to. The line is checked before the run: syntax, and that the nets and parts it names exist in the schematic.
+- **`.meas` directive:** measurements on the results, printed in the status bar and the simulator log, and by the command line. spicy computes them from the data, so they work with every simulator:
+  - `.meas tran vmax MAX V(out) [FROM=1m TO=2m]`, also `MIN`, `AVG`, `RMS`, `PP` (peak to peak) and `INTEG`
+  - `.meas tran v2m FIND V(out) AT=2m`
+  - `.meas tran tdelay TRIG V(in) VAL=0.5 RISE=1 TARG V(out) VAL=0.9 RISE=1` (time between two crossings; `RISE=`, `FALL=` or `CROSS=`)
 - **Pop-out window** (**Ctrl+Shift+W**): waveforms in their own window, e.g. on a second monitor or full screen.
 - Export the traces to CSV.
 
@@ -90,6 +96,7 @@ spicy circuit.edn other.asc             # open schematics (LTspice files are imp
 ```sh
 spicy --netlist <file> [--sim <id>]                 # print the netlist
 spicy --run <file> [--sim <id>] [--csv out.csv]     # simulate and list or save the results
+spicy --run <file> --trace 'V(out)' [--trace …]    # range and last value of trace expressions
 spicy --import-asc <in.asc> <out.edn>               # convert an LTspice schematic
 spicy --import-model <file>                         # add a SPICE model library
 spicy --embed <file.edn>                            # embed used models and symbols in the file
@@ -130,3 +137,14 @@ The `examples/` folder has ready-to-run schematics: an RC low-pass filter (trans
 spicy examples/rc_lowpass.edn
 spicy --run examples/rc_ac.edn
 ```
+
+One example per feature shows every form it takes, with comments in the schematic. They run on ngspice, Xyce and VACASK, and F5 runs them:
+
+| Example | Shows |
+|---|---|
+| `examples/plot.edn` | `.plot`: one trace, several per line, `V(a,b)`, currents, expressions |
+| `examples/expressions.edn` | Comparisons, `if()`, `min`, `max`, `abs`, `sqrt`, `d()` and `int()` |
+| `examples/meas.edn` | `.meas`: `MAX`, `MIN`, `AVG`, `RMS`, `PP`, `INTEG`, `FIND`, and `TRIG`/`TARG` with `RISE`, `FALL` and `CROSS` |
+| `examples/step.edn` | `.step param` with a list, and the start/stop/increment form in a comment |
+| `examples/noise.edn` | `.noise` with both spectra; other sweeps and the reference node in comments |
+

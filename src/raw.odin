@@ -34,8 +34,16 @@ plot_free :: proc(p: ^Plot) {
 	p^ = {}
 }
 
+// A plot the viewer lists: curves over a sweep. A single value (an operating point, the
+// integrated noise) has no curve to draw, so it is not listed.
+plot_listed :: proc(p: ^Plot) -> bool {
+	return p.npoints > 1 && len(p.vecs) > 1
+}
+
 plot_kind :: proc(p: ^Plot) -> string {
 	n := lower(p.name)
+	// a .step run labels the plot with its value: " [R=2k]", which says nothing of the analysis
+	if i := strings.index(n, " ["); i >= 0 do n = n[:i]
 	switch {
 	case strings.contains(n, "transient"): return "tran"
 	case strings.contains(n, "ac"): return "ac"

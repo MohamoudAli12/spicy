@@ -15,12 +15,37 @@ Plot_Ref :: struct {
 	name: string,
 }
 
-// The arguments of a .plot line, or ok = false when the line is not one.
-plot_line_args :: proc(l: string) -> (args: string, ok: bool) {
+// The arguments of a line of the card (".plot", ".meas" …), or ok = false when it is another line.
+card_args :: proc(l, card: string) -> (args: string, ok: bool) {
 	t := strings.trim_space(l)
-	if len(t) < 5 || lower(t[:5]) != ".plot" do return "", false
-	if len(t) > 5 && t[5] != ' ' && t[5] != '\t' do return "", false // .plots and the like
-	return strings.trim_space(t[5:]), true
+	if len(t) < len(card) || lower(t[:len(card)]) != card do return "", false
+	if len(t) > len(card) && t[len(card)] != ' ' && t[len(card)] != '\t' do return "", false // .plots and the like
+	return strings.trim_space(t[len(card):]), true
+}
+
+// The arguments of a .plot line, or ok = false when the line is not one.
+plot_line_args :: proc(l: string) -> (args: string, ok: bool) {return card_args(l, ".plot")}
+
+// A line of a card this file handles (.plot, .meas, .step): kept out of the simulator's netlist.
+spicy_card_line :: proc(l: string) -> bool {
+	for c in ([?]string{".plot", ".meas", ".step"}) {
+		if _, ok := card_args(l, c); ok do return true
+	}
+	return false
+}
+
+// The arguments of every line of a card in the schematic's directives, in order.
+card_lines :: proc(s: ^Schematic, sim: ^Simulator_Def, card: string) -> []string {
+	out := make([dynamic]string, context.temp_allocator)
+	for t in s.texts {
+		if !t.directive do continue
+		body, ok := directive_for(t.text, sim)
+		if !ok do continue
+		for l in split_lines(body) {
+			if args, is := card_args(l, card); is do append(&out, args)
+		}
+	}
+	return out[:]
 }
 
 // The comma-separated expressions of a .plot argument list, commas inside parentheses kept.
@@ -47,15 +72,8 @@ plot_split :: proc(args: string) -> []string {
 // Every expression of the .plot lines that apply to this simulator, in schematic order.
 plot_requests :: proc(s: ^Schematic, sim: ^Simulator_Def) -> []string {
 	out := make([dynamic]string, context.temp_allocator)
-	for t in s.texts {
-		if !t.directive do continue
-		body, ok := directive_for(t.text, sim)
-		if !ok do continue
-		for l in split_lines(body) {
-			args, is := plot_line_args(l)
-			if !is do continue
-			for e in plot_split(args) do append(&out, e)
-		}
+	for args in card_lines(s, sim, ".plot") {
+		for e in plot_split(args) do append(&out, e)
 	}
 	return out[:]
 }
@@ -80,6 +98,25 @@ pc_fail :: proc(c: ^Plot_Check, msg: string) {
 pc_peek :: proc(c: ^Plot_Check) -> u8 {
 	for c.pos < len(c.src) && (c.src[c.pos] == ' ' || c.src[c.pos] == '\t') do c.pos += 1
 	return c.src[c.pos] if c.pos < len(c.src) else 0
+}
+
+// A sum, optionally compared with another sum (the same operators as expr.odin).
+@(private = "file")
+pc_expr :: proc(c: ^Plot_Check) {
+	pc_sum(c)
+	if len(c.err) > 0 do return
+	ch := pc_peek(c)
+	if ch != '<' && ch != '>' && ch != '=' && ch != '!' do return
+	rest := c.src[c.pos:]
+	for op in ([?]string{"<=", ">=", "==", "!=", "<", ">"}) {
+		if strings.has_prefix(rest, op) {
+			c.pos += len(op)
+			pc_sum(c)
+			return
+		}
+	}
+	if ch == '!' do pc_fail(c, "\"!\" alone is not an operator. Correct: V(out) != 0")
+	else do pc_fail(c, "\"=\" alone is not an operator. Correct: V(out) == 1")
 }
 
 // The expression grammar: sum of products, products of unaries, unary minus, and ^.
@@ -127,6 +164,8 @@ plot_example :: proc(name: string) -> string {
 	switch {
 	case lname == "v": return "V(out)"
 	case lname[0] == 'i' && !is_func(lname): return tcat(name, "(R1)")
+	case lname == "if": return tcat(name, "(V(out) > 0.5, 1, 0)")
+	case lname == "min" || lname == "max": return tcat(name, "(V(out), 1)")
 	}
 	return tcat(name, "(V(out))")
 }
@@ -141,6 +180,7 @@ plot_missing_operand :: proc(src: string) -> string {
 	case '*', '/': return fmt.tprintf("an operand is missing after \"%c\". Correct: V(out) %c 2", t[len(t) - 1], t[len(t) - 1])
 	case '^': return "an operand is missing after \"^\". Correct: V(out) ^ 2"
 	case '(': return "nothing inside \"(\". Correct: (V(out) + 1)"
+	case '<', '>', '=', '!': return "an operand is missing after the comparison. Correct: V(out) > 0.5"
 	case ',': return "an argument is missing after \",\". Correct: max(V(out), 1e3)"
 	}
 	return "an expression is missing at the end. Correct: V(out)"
@@ -155,7 +195,7 @@ pc_primary :: proc(c: ^Plot_Check) {
 	}
 	if ch == '(' {
 		c.pos += 1
-		pc_sum(c)
+		pc_expr(c)
 		if len(c.err) > 0 do return
 		if pc_peek(c) != ')' {
 			pc_fail(c, "\"(\" has no closing \")\". Correct: (V(out) + 1)")
@@ -219,13 +259,15 @@ pc_primary :: proc(c: ^Plot_Check) {
 		c.pos = end
 	case:
 		if !is_func(lname) {
-			pc_fail(c, fmt.tprintf("unknown function \"%s()\". Functions: abs sqrt db mag ph re im ln log10 exp sin cos tan atan d min max int. Correct: db(V(out))", name))
+			pc_fail(c, fmt.tprintf("unknown function \"%s()\". Functions: abs sqrt db mag ph re im ln log10 exp sin cos tan atan d min max int if. Correct: db(V(out))", name))
 			return
 		}
 		c.pos = open + 1
+		nargs := 0
 		if pc_peek(c) != ')' {
 			for {
-				pc_sum(c)
+				pc_expr(c)
+				nargs += 1
 				if len(c.err) > 0 || pc_peek(c) != ',' do break
 				c.pos += 1
 			}
@@ -236,15 +278,25 @@ pc_primary :: proc(c: ^Plot_Check) {
 			return
 		}
 		c.pos += 1
+		// the number of arguments: three for if, two for min and max, one for the others
+		want := 1
+		switch lname {
+		case "if": want = 3
+		case "min", "max": want = 2
+		}
+		if nargs != want {
+			pc_fail(c, fmt.tprintf("%s() takes %d argument%s, not %d. Correct: %s", name, want, "" if want == 1 else "s", nargs, plot_example(name)))
+			return
+		}
 	}
 }
 
 // The names an expression uses, or the first syntax error.
-plot_check_expr :: proc(src: string) -> (refs: []Plot_Ref, err: string) {
+plot_check_expr :: proc(src, example: string) -> (refs: []Plot_Ref, err: string) {
 	c := Plot_Check{src = src, refs = make([dynamic]Plot_Ref, context.temp_allocator)}
-	pc_sum(&c)
+	pc_expr(&c)
 	if len(c.err) == 0 && pc_peek(&c) != 0 {
-		pc_fail(&c, fmt.tprintf("\"%s\" cannot follow the expression. Separate expressions with a comma. Correct: .plot V(out), I(R1)", c.src[c.pos:]))
+		pc_fail(&c, fmt.tprintf("\"%s\" cannot follow the expression. Correct: %s", c.src[c.pos:], example))
 	}
 	return c.refs[:], c.err
 }
@@ -297,11 +349,18 @@ plot_validate :: proc(nl: ^Netlist, s: ^Schematic) {
 			append(&nl.errors, ".plot needs an expression. Correct: .plot V(out), I(R1)")
 			continue
 		}
-		refs, err := plot_check_expr(e)
-		if len(err) > 0 {
-			append(&nl.errors, fmt.tprintf(".plot \"%s\": %s", e, err))
-			continue
-		}
+		expr_validate(nl, s, tcat(".plot \"", e, "\""), e, ".plot V(out), I(R1)")
+	}
+}
+
+// Syntax and names of one expression of a directive; label is how its messages name it.
+expr_validate :: proc(nl: ^Netlist, s: ^Schematic, label, e, example: string) {
+	refs, err := plot_check_expr(e, example)
+	if len(err) > 0 {
+		append(&nl.errors, fmt.tprintf("%s: %s", label, err))
+		return
+	}
+	{
 		for r in refs {
 			if strings.contains_any(r.name, "@#.:[]$") do continue
 			switch r.kind {
@@ -316,7 +375,7 @@ plot_validate :: proc(nl: ^Netlist, s: ^Schematic) {
 				if !found {
 					near := plot_nearest(r.name, nets[:])
 					if len(near) == 0 do near = "out"
-					append(&nl.errors, fmt.tprintf(".plot \"%s\": no net \"%s\" in the schematic. Nets here: %s. Correct: V(%s)", e, r.name, plot_list(nets[:]), near))
+					append(&nl.errors, fmt.tprintf("%s: no net \"%s\" in the schematic. Nets here: %s. Correct: V(%s)", label, r.name, plot_list(nets[:]), near))
 				}
 			case 'i':
 				found := false
@@ -328,7 +387,7 @@ plot_validate :: proc(nl: ^Netlist, s: ^Schematic) {
 				if !found {
 					near := plot_nearest(r.name, parts[:])
 					if len(near) == 0 do near = "R1"
-					append(&nl.errors, fmt.tprintf(".plot \"%s\": no part \"%s\" in the schematic. Parts here: %s. Correct: I(%s)", e, r.name, plot_list(parts[:]), near))
+					append(&nl.errors, fmt.tprintf("%s: no part \"%s\" in the schematic. Parts here: %s. Correct: I(%s)", label, r.name, plot_list(parts[:]), near))
 				}
 			}
 		}
@@ -360,13 +419,19 @@ plot_pick :: proc(r: ^Run, sch: ^Schematic, sim: ^Simulator_Def, idx: int) -> in
 	if idx >= 0 do append(&order, idx)
 	for i in 0 ..< len(r.plots) do if i != idx do append(&order, i)
 	for i in order {
+		if !plot_listed(&r.plots[i]) do continue
 		all := true
 		for e in r.plot_traces do if len(plot_expr_error(e, &r.plots[i], sch, sim)) > 0 do all = false
 		if all do return i
 	}
 	chosen := max(idx, 0)
 	for e in r.plot_traces {
-		if msg := plot_expr_error(e, &r.plots[chosen], sch, sim); len(msg) > 0 {
+		msg := plot_expr_error(e, &r.plots[chosen], sch, sim)
+		if len(msg) == 0 do continue
+		// a trace another analysis of this run has (noise vectors, say) is not a mistake: the viewer shows it there
+		elsewhere := false
+		for i in 0 ..< len(r.plots) do if len(plot_expr_error(e, &r.plots[i], sch, sim)) == 0 do elsewhere = true
+		if !elsewhere {
 			append(&r.warnings, strings.clone(fmt.tprintf(".plot \"%s\": %s. Correct: a net or part this analysis writes, e.g. V(out) or I(R1)", e, msg)))
 		}
 	}

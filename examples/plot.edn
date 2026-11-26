@@ -1,0 +1,21 @@
+;; spicy schematic (EDN)
+{:spicy-schematic 1
+ :components [{:symbol "voltage" :ref "V1" :value "PULSE(0 1 0 1n 1n 5u 10u)" :at [0 0]}
+              {:symbol "res" :ref "R1" :value "1k" :at [320 -48] :rot 90}
+              {:symbol "cap" :ref "C1" :value "1n" :at [416 16]}]
+ :wires [[0 -32 224 -32] [0 96 0 128] [0 128 432 128] [0 16 0 -32]
+         [432 128 432 80] [432 16 432 -32] [144 -80 144 -32] [304 -32 432 -32]
+         [336 -80 336 -32]]
+ :flags [{:name "0" :at [0 128]}
+         {:name "in" :at [144 -64] :rot 14}
+         {:name "out" :at [336 -64] :rot 14}]
+ :texts [{:at [0 176] :text "RC low-pass, 1k and 1n (time constant 1 us). Each .plot line adds its traces after every run."}
+         {:at [0 208] :text ".tran 20n 10u" :directive true}
+         {:at [0 240] :text ".plot V(out)" :directive true}
+         {:at [0 272] :text "Several expressions on one line, separated by commas:"}
+         {:at [0 304] :text ".plot V(in), V(out)" :directive true}
+         {:at [0 336] :text "The voltage between two nets: V(a,b) is V(a) - V(b)."}
+         {:at [0 368] :text ".plot V(in,out)" :directive true}
+         {:at [0 400] :text "The current through a part, and any expression of the results. 1kohm is 1k with a unit, so I(R1) * 1kohm is in V."}
+         {:at [0 432] :text ".plot I(R1), I(R1) * 1kohm" :directive true}]
+ :waves {:plot "" :panes []}}

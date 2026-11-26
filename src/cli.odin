@@ -34,7 +34,7 @@ exit codes: 0 ok, 1 problems found / run failed, 2 usage, 3 file error, 4 simula
 
 // Value flags take the next argument.
 @(private = "file")
-VALUE_FLAGS :: [?]string{"--at", "--rot", "--value", "--net", "--to", "-o", "--sim", "--csv"}
+VALUE_FLAGS :: [?]string{"--at", "--rot", "--value", "--net", "--to", "-o", "--sim", "--csv", "--trace"}
 
 @(private = "file")
 flag_value :: proc(args: []string, name: string) -> (string, bool) {
@@ -43,6 +43,17 @@ flag_value :: proc(args: []string, name: string) -> (string, bool) {
 		return args[i + 1], true
 	}
 	return "", false
+}
+
+// Every value of a flag that may repeat.
+@(private = "file")
+flag_values :: proc(args: []string, name: string) -> []string {
+	out := make([dynamic]string, context.temp_allocator)
+	for a, i in args do if a == name {
+		if i + 1 >= len(args) do cli_usage(tcat(name, " needs a value"))
+		append(&out, args[i + 1])
+	}
+	return out[:]
 }
 
 @(private = "file")
@@ -613,11 +624,22 @@ cli_netlist_or_run :: proc(path: string, netlist_only: bool, args: []string) {
 		cli_fail(code, "run", r.message, r.warnings[:])
 	}
 	if csv, ok := flag_value(args, "--csv"); ok && len(r.plots) > 0 {
-		if !write_csv(&r.plots[len(r.plots) - 1], csv) do cli_fail(EXIT_FILE, "write", tcat("cannot write ", csv))
+		// the last analysis with traces: not a one-point result (operating point, integrated noise)
+		pi := len(r.plots) - 1
+		for k := len(r.plots) - 1; k >= 0; k -= 1 do if plot_listed(&r.plots[k]) {
+			pi = k
+			break
+		}
+		if !write_csv(&r.plots[pi], csv) do cli_fail(EXIT_FILE, "write", tcat("cannot write ", csv))
 	}
+	meas_run(&r, &s, sim)
+	traces := flag_values(args, "--trace")
+	stats := make([dynamic]Trace_Stat, context.temp_allocator)
+	for e in traces do append(&stats, cli_trace_stat(&r, &s, sim, e))
 	if out_fmt == .Text {
 		for x in r.warnings do fmt.eprintln("warning:", x)
 		fmt.println(r.message)
+		for m in r.measures do fmt.println("measure", m)
 		for &p in r.plots {
 			fmt.printfln("plot \"%s\" (%s, %d points%s)", p.name, base_name(p.file), p.npoints, ", complex" if p.complex else "")
 			for v in p.vecs {
@@ -625,6 +647,13 @@ cli_netlist_or_run :: proc(path: string, netlist_only: bool, args: []string) {
 				if last < 0 do continue
 				fmt.printfln("  %-28s %s", v.name, fmt_eng(v.re[last], v.unit) if !p.complex else fmt.tprintf("%s ∠ %.1f°", fmt_eng(abs_c(v.re[last], v.im[last]), v.unit), phase_deg(v.re[last], v.im[last])))
 			}
+		}
+		for st in stats {
+			if len(st.err) > 0 {
+				fmt.printfln("trace %s: %s", st.expr, st.err)
+				continue
+			}
+			fmt.printfln("trace %s (%s): min %s, max %s, last %s", st.expr, st.plot, fmt_eng(st.lo, st.unit), fmt_eng(st.hi, st.unit), fmt_eng(st.last, st.unit))
 		}
 		return
 	}
@@ -635,6 +664,7 @@ cli_netlist_or_run :: proc(path: string, netlist_only: bool, args: []string) {
 	em_key("simulator"); em_str(sim.id)
 	em_key("message"); em_str(r.message)
 	em_key("warnings"); em_strs(r.warnings[:])
+	em_key("measures"); em_strs(r.measures[:])
 	em_key("plots"); em_vec()
 	for &p in r.plots {
 		em_map()
@@ -669,7 +699,74 @@ cli_netlist_or_run :: proc(path: string, netlist_only: bool, args: []string) {
 		em_map_end()
 	}
 	em_vec_end()
+	if len(traces) > 0 {
+		em_key("traces"); em_vec()
+		for st in stats {
+			em_map()
+			em_key("expr"); em_str(st.expr)
+			if len(st.err) > 0 {
+				em_key("error"); em_str(st.err)
+			} else {
+				em_key("plot"); em_str(st.plot)
+				em_key("unit"); em_str(st.unit)
+				em_key("min"); em_num(st.lo)
+				em_key("max"); em_num(st.hi)
+				em_key("final"); em_num(st.last)
+			}
+			em_map_end()
+		}
+		em_vec_end()
+	}
 	em_map_end(); em_print()
+}
+
+// One --trace: the range and last value of an expression on the analysis the viewer shows.
+Trace_Stat :: struct {
+	expr, plot, unit, err: string,
+	lo, hi, last:          f64,
+}
+
+@(private = "file")
+cli_trace_stat :: proc(r: ^Run, s: ^Schematic, sim: ^Simulator_Def, expr: string) -> Trace_Stat {
+	st := Trace_Stat{expr = expr}
+	if len(r.plots) == 0 {
+		st.err = "the run has no results"
+		return st
+	}
+	idx := 0
+	for &p, i in r.plots do if plot_kind(&p) != "op" && p.npoints > 1 {idx = i; break}
+	// a trace that only another analysis has (a noise vector, say) is read from that one
+	if len(plot_expr_error(expr, &r.plots[idx], s, sim)) > 0 {
+		for i in 0 ..< len(r.plots) do if len(plot_expr_error(expr, &r.plots[i], s, sim)) == 0 {idx = i; break}
+	}
+	st.plot = r.plots[idx].name
+	res := expr_eval(expr, &r.plots[idx], s, sim)
+	defer {
+		delete(res.re)
+		delete(res.im)
+		delete(res.unit)
+	}
+	if len(res.err) > 0 {
+		st.err = strings.clone(res.err, context.temp_allocator)
+		delete(res.err)
+		return st
+	}
+	defer delete(res.err)
+	st.unit = strings.clone(res.unit, context.temp_allocator)
+	if len(res.re) == 0 do return st
+	value := proc(res: Eval_Result, i: int) -> f64 {
+		// a real result of a complex analysis (db, ph, mag) keeps its sign
+		if res.im == nil || res.im[i] == 0 do return res.re[i]
+		return abs_c(res.re[i], res.im[i])
+	}
+	st.lo, st.hi = value(res, 0), value(res, 0)
+	for i in 0 ..< len(res.re) {
+		x := value(res, i)
+		st.lo = min(st.lo, x)
+		st.hi = max(st.hi, x)
+	}
+	st.last = value(res, len(res.re) - 1)
+	return st
 }
 
 // The command-line commands of this file; false when args[0] is not one of them.

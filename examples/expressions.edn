@@ -1,0 +1,31 @@
+;; spicy schematic (EDN)
+{:spicy-schematic 1
+ :components [{:symbol "voltage" :ref "V1" :value "PULSE(0 1 0 1n 1n 5u 10u)" :at [0 0]}
+              {:symbol "res" :ref "R1" :value "1k" :at [320 -48] :rot 90}
+              {:symbol "cap" :ref "C1" :value "1n" :at [416 16]}]
+ :wires [[0 -32 224 -32] [0 96 0 128] [0 128 432 128] [0 16 0 -32]
+         [432 128 432 80] [432 16 432 -32] [144 -80 144 -32] [304 -32 432 -32]
+         [336 -80 336 -32]]
+ :flags [{:name "0" :at [0 128]}
+         {:name "in" :at [144 -80]}
+         {:name "out" :at [336 -80]}]
+ :texts [{:at [0 176] :text "Trace expressions: operators, comparisons, functions and if(). All traces here are scaled to about 0 .. 1."}
+         {:at [0 208] :text ".tran 20n 10u" :directive true}
+         {:at [0 240] :text ".plot V(out)" :directive true}
+         {:at [0 272] :text "Comparisons give 1 where they hold, 0 elsewhere: < > <= >= == !="}
+         {:at [0 304] :text ".plot V(out) > 0.5" :directive true}
+         {:at [0 336] :text "Comparisons combine with arithmetic: 1 while V(out) is between 0.2 and 0.8."}
+         {:at [0 368] :text ".plot (V(out) > 0.2) * (V(out) < 0.8)" :directive true}
+         {:at [0 400] :text "if(cond, a, b): a where cond is nonzero, b elsewhere."}
+         {:at [0 432] :text ".plot if(V(out) > 0.5, V(out), 0)" :directive true}
+         {:at [0 464] :text "min and max take two arguments; abs, sqrt and the others take one."}
+         {:at [0 496] :text ".plot min(V(in), V(out)), max(V(out), 0.25), abs(V(in) - V(out)), sqrt(V(out))" :directive true}
+         {:at [0 528] :text "d() is the derivative and int() the running integral: d(V(out)) times the 1us time constant is in V, and the charge of C1 over 1nF is V(out)."}
+         {:at [0 560] :text ".plot d(V(out)) * 1us, int(I(C1)) / 1nF" :directive true}]
+ :waves {:plot "" :panes []}
+ ;; copies of the models and symbols this schematic uses, so that it simulates on any
+ ;; computer with spicy (used before the models of the computer that opens it; refreshed on every save, keeping
+ ;; the copies; :schematic :embed-models in settings.edn)
+ :embedded {:models [{:name "d" :from "spicy default"
+                      :text ".model D D"}]
+            :symbols []}}

@@ -67,7 +67,8 @@ fmt_eng :: proc(v: f64, unit := "", digits := 4, allocator := context.temp_alloc
 	a := abs(v)
 	e := int(math.floor(math.log10(a) / 3))
 	e = clamp(e, -6, 4)
-	log_unit := strings.has_prefix(unit, "dB") || unit == "°" // dB, dBV, dBA, °: no prefix
+	// dB, dBV, dBA, °: no prefix. A slope of them (dB/Hz, °/Hz) is an ordinary unit and has one.
+	log_unit := (strings.has_prefix(unit, "dB") || unit == "°") && !strings.contains(unit, "/") && !strings.contains(unit, "·")
 	if log_unit do e = 0
 	m := v / math.pow(10, f64(e * 3))
 	am := abs(m)

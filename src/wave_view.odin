@@ -73,11 +73,17 @@ Wave_Sel :: struct {
 
 Wave_Drag :: enum u8 {None, Zoom, Pan, Cursor1, Cursor2}
 
+// The tables of the viewer: the .meas results, and the one-point results (operating point, integrated noise).
+TABLE_NONE :: 0
+TABLE_MEAS :: 1
+TABLE_VALUES :: 2
+
 Wave_View :: struct {
 	panes:      [dynamic]Pane,
 	active:     int,
 	plot_idx:   int,
 	plot_kind:  string,
+	table:      int, // a table shown instead of the plots: TABLE_NONE, TABLE_MEAS or TABLE_VALUES
 	using axis: X_Axis,
 	swapped:    int, // pane whose axis is in `axis` (-1: the shared one)
 	cursors:    [2]Cursor,
@@ -386,22 +392,82 @@ wave_add_marker_at_mouse :: proc(w: ^Wave_View) {
 	append(&w.markers, Marker{pane = wave_mouse_pane, trace = tr, x = wave_mouse_x})
 }
 
-wave_next_plot :: proc(w: ^Wave_View, r: ^Run) {
-	if len(r.plots) < 2 do return
-	w.plot_idx = (w.plot_idx + 1) % len(r.plots)
+// The plots the viewer lists, by index into r.plots.
+wave_listed_plots :: proc(r: ^Run) -> []int {
+	out := make([dynamic]int, context.temp_allocator)
+	for &p, i in r.plots do if plot_listed(&p) do append(&out, i)
+	return out[:]
+}
+
+// Tab: the next analysis, then the measurement table (when the run has results), then the first again.
+wave_next_plot :: proc(w: ^Wave_View, r: ^Run, sch: ^Schematic, sim: ^Simulator_Def) {
+	// the cycle: the plots (their index), then the tables (-1, -2)
+	cycle := make([dynamic]int, context.temp_allocator)
+	for pi in wave_listed_plots(r) do append(&cycle, pi)
+	if len(r.meas_rows) > 0 do append(&cycle, -1)
+	if len(wave_value_rows(r)) > 0 do append(&cycle, -2)
+	if len(cycle) < 2 do return
+	cur := w.plot_idx
+	if w.table == TABLE_MEAS do cur = -1
+	if w.table == TABLE_VALUES do cur = -2
+	next := 0
+	for c, k in cycle do if c == cur do next = (k + 1) % len(cycle)
+	if cycle[next] < 0 {
+		w.table = TABLE_MEAS if cycle[next] == -1 else TABLE_VALUES
+		return
+	}
+	w.table = TABLE_NONE
+	w.plot_idx = cycle[next]
 	set_str(&w.plot_kind, plot_kind(&r.plots[w.plot_idx]))
 	w.dirty = true
 	w.auto_x = true
 	for &p in w.panes do p.auto_y = true
+	wave_refit_plot_traces(w, r, sch, sim)
+}
+
+// The .plot traces that the current analysis can show: the others are left out (no error
+// lines), and they appear when their analysis is shown (Tab).
+@(private = "file")
+wave_plot_trace_ok :: proc(w: ^Wave_View, r: ^Run, sch: ^Schematic, sim: ^Simulator_Def, e: string) -> bool {
+	return w.plot_idx >= 0 && w.plot_idx < len(r.plots) && len(plot_expr_error(e, &r.plots[w.plot_idx], sch, sim)) == 0
+}
+
+@(private = "file")
+wave_refit_plot_traces :: proc(w: ^Wave_View, r: ^Run, sch: ^Schematic, sim: ^Simulator_Def) {
+	for &p in w.panes {
+		if p.fft != nil do continue
+		for i := len(p.traces) - 1; i >= 0; i -= 1 {
+			if !wave_is_plot_trace(r, p.traces[i].expr) || wave_plot_trace_ok(w, r, sch, sim, p.traces[i].expr) do continue
+			ordered_remove(&p.traces, i)
+			w.sel = {-1, -1}
+		}
+	}
+	for e in r.plot_traces {
+		if !wave_plot_trace_ok(w, r, sch, sim, e) || wave_trace_shown(w, e) do continue
+		wave_add_trace(w, e, false)
+	}
+}
+
+@(private = "file")
+wave_is_plot_trace :: proc(r: ^Run, expr: string) -> bool {
+	for e in r.plot_traces do if e == expr do return true
+	return false
+}
+
+@(private = "file")
+wave_trace_shown :: proc(w: ^Wave_View, expr: string) -> bool {
+	for &p in w.panes do if p.fft == nil do for t in p.traces do if strings.equal_fold(t.expr, expr) do return true
+	return false
 }
 
 // A run finished: show its results.
 wave_new_run :: proc(w: ^Wave_View, r: ^Run, sch: ^Schematic, sim: ^Simulator_Def) {
+	w.table = TABLE_NONE
 	if !S.w_keep_traces do wave_clear(w)
 	// the same kind of analysis as before, else the first that is not an operating point
 	idx := -1
-	if len(w.plot_kind) > 0 do for &p, i in r.plots do if plot_kind(&p) == w.plot_kind && idx < 0 do idx = i
-	if idx < 0 do for &p, i in r.plots do if plot_kind(&p) != "op" && p.npoints > 1 && idx < 0 do idx = i
+	if len(w.plot_kind) > 0 do for &p, i in r.plots do if plot_kind(&p) == w.plot_kind && plot_listed(&p) && idx < 0 do idx = i
+	if idx < 0 do for &p, i in r.plots do if plot_kind(&p) != "op" && plot_listed(&p) && idx < 0 do idx = i
 	if idx < 0 && len(r.plots) > 0 do idx = 0
 	// .plot directives: the analysis they can be shown in
 	idx = plot_pick(r, sch, sim, idx)
@@ -417,7 +483,7 @@ wave_new_run :: proc(w: ^Wave_View, r: ^Run, sch: ^Schematic, sim: ^Simulator_De
 		p.auto_y = true
 		if p.fft != nil do p.fft.ax.auto_x = true
 	}
-	for e in r.plot_traces do wave_add_trace(w, e, false)
+	wave_refit_plot_traces(w, r, sch, sim)
 }
 
 // Re-evaluates every trace against the current plot.
@@ -742,6 +808,13 @@ draw_waves :: proc(d: ^Doc, r: Rect) {
 	hdr := Rect{r.x, r.y, r.w, fsz + 12}
 	body := Rect{r.x, r.y + hdr.h, r.w, r.h - hdr.h}
 	draw_wave_header(d, hdr)
+	if w.table != TABLE_NONE {
+		rows := wave_table_rows(&d.run, w.table)
+		if len(rows) > 0 {
+			draw_meas_table(rows, body, fsz)
+			return
+		}
+	}
 	if len(w.panes) == 0 do append(&w.panes, Pane{auto_y = true})
 	if wave_trace_count(w) == 0 {
 		msg := "Run the simulation (F5), then click on wires and parts to see their waveforms."
@@ -1070,8 +1143,8 @@ draw_cursor_box :: proc(w: ^Wave_View, body: Rect, fsz: f32) {
 		dy := vals[1][1] - vals[0][1]
 		append(&lines, fmt.tprintf("Δx %s   Δy %s", fmt_eng(dx, x_unit, 5), fmt_eng(dy, unit, 5)))
 		if dx != 0 {
-			su := tcat(unit, "/", x_unit) if len(unit) > 0 && len(x_unit) > 0 else ""
-			append(&lines, fmt.tprintf("slope %s   1/Δx %s", fmt_eng(dy / dx, su, 4), fmt_eng(1 / abs(dx), "Hz" if x_unit == "s" else "", 4)))
+			su := unit_div(unit, x_unit) if len(unit) > 0 && len(x_unit) > 0 else ""
+			append(&lines, fmt.tprintf("slope %s   1/Δx %s", fmt_eng(dy / dx, su, 4), fmt_eng(1 / abs(dx), unit_div("", x_unit), 4)))
 		}
 	}
 	if S.w_cursor_box != true {
@@ -1094,6 +1167,53 @@ draw_cursor_box :: proc(w: ^Wave_View, body: Rect, fsz: f32) {
 }
 
 @(private = "file")
+// The rows of a table: the .meas results, or the one-point results of the run.
+wave_table_rows :: proc(r: ^Run, table: int) -> []Meas_Row {
+	if table == TABLE_MEAS do return r.meas_rows[:]
+	if table == TABLE_VALUES do return wave_value_rows(r)
+	return nil
+}
+
+// One row per value of each one-point plot (an operating point, the integrated noise).
+wave_value_rows :: proc(r: ^Run) -> []Meas_Row {
+	out := make([dynamic]Meas_Row, context.temp_allocator)
+	for &p in r.plots {
+		if plot_listed(&p) do continue
+		for v in p.vecs do if len(v.re) > 0 {
+			append(&out, Meas_Row{name = v.name, measure = "value", result = fmt_eng(v.re[0], v.unit, 5), analysis = p.name})
+		}
+	}
+	return out[:]
+}
+
+// A table: one row per result (.meas or one-point).
+draw_meas_table :: proc(rows: []Meas_Row, body: Rect, fsz: f32) {
+	heads := [4]string{"Name", "Measurement", "Result", "Analysis"}
+	rh := fsz + 8
+	cw: [4]f32
+	for h, c in heads do cw[c] = text_w(h, fsz)
+	for row in rows {
+		cells := [4]string{row.name, row.measure, row.result, row.analysis}
+		for s, c in cells do cw[c] = max(cw[c], text_w(s, fsz))
+	}
+	for c in 0 ..< 4 do cw[c] += 24
+	y := body.y + 8
+	x := body.x + 8
+	for h, c in heads {
+		draw_text(h, x, y, th.muted, fsz)
+		x += cw[c]
+	}
+	for row in rows {
+		y += rh
+		cells := [4]string{row.name, row.measure, row.result, row.analysis}
+		x = body.x + 8
+		for s, c in cells {
+			draw_text(s, x, y, th.w_text, fsz)
+			x += cw[c]
+		}
+	}
+}
+
 draw_wave_header :: proc(d: ^Doc, r: Rect) {
 	w := &d.wave
 	fill(r, mix(th.w_bg, th.bar, 0.6))
@@ -1101,21 +1221,40 @@ draw_wave_header :: proc(d: ^Doc, r: Rect) {
 	b := r_inset(r, 2)
 	fsz := S.w_font_size * ui_scale
 	// analysis selector
-	if len(d.run.plots) > 0 {
-		names := make([dynamic]string, context.temp_allocator)
-		for &p in d.run.plots {
-			n := p.name
-			if len(p.file) > 0 && len(d.run.plots) > 1 do n = tcat(p.name, " (", base_name(p.file), ")")
-			append(&names, n)
-		}
-		sel := clamp(w.plot_idx, 0, len(names) - 1)
+	listed := wave_listed_plots(&d.run)
+	names := make([dynamic]string, context.temp_allocator)
+	sel := 0
+	for pi, k in listed {
+		p := &d.run.plots[pi]
+		n := p.name
+		if len(p.file) > 0 && len(d.run.plots) > 1 do n = tcat(p.name, " (", base_name(p.file), ")")
+		append(&names, n)
+		if w.table == TABLE_NONE && pi == w.plot_idx do sel = k
+	}
+	// the tables, after the plots
+	kinds := make([dynamic]int, context.temp_allocator)
+	if len(d.run.meas_rows) > 0 {
+		append(&names, "Measurements")
+		append(&kinds, TABLE_MEAS)
+	}
+	if len(wave_value_rows(&d.run)) > 0 {
+		append(&names, "Values")
+		append(&kinds, TABLE_VALUES)
+	}
+	if w.table != TABLE_NONE do for kind, k in kinds do if kind == w.table do sel = len(listed) + k
+	if len(names) > 0 {
 		cr := cut_left(&b, min(300 * ui_scale, b.w / 2))
 		if combo("wave.plot", cr, names[:], &sel) {
-			w.plot_idx = sel
-			set_str(&w.plot_kind, plot_kind(&d.run.plots[sel]))
-			w.dirty = true
-			w.auto_x = true
-			for &p in w.panes do p.auto_y = true
+			if sel >= len(listed) {
+				w.table = kinds[sel - len(listed)]
+			} else {
+				w.table = TABLE_NONE
+				w.plot_idx = listed[sel]
+				set_str(&w.plot_kind, plot_kind(&d.run.plots[w.plot_idx]))
+				w.dirty = true
+				w.auto_x = true
+				for &p in w.panes do p.auto_y = true
+			}
 		}
 		cut_left(&b, 6)
 	} else {

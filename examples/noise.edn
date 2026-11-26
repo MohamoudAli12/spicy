@@ -1,0 +1,18 @@
+;; spicy schematic (EDN)
+{:spicy-schematic 1
+ :components [{:symbol "voltage" :ref "V1" :value "PULSE(0 1 0 1n 1n 5u 10u) AC 1" :at [0 0]}
+              {:symbol "res" :ref "R1" :value "1k" :at [288 -48] :rot 90}
+              {:symbol "cap" :ref "C1" :value "1n" :at [384 16]}]
+ :wires [[0 -32 192 -32] [0 96 0 128] [16 128 400 128] [0 16 0 -32]
+         [64 -48 64 -32] [400 -48 400 16] [400 80 400 128] [272 -32 400 -32]
+         [0 128 16 128]]
+ :flags [{:name "0" :at [16 128]}
+         {:name "in" :at [64 -48] :rot 14}
+         {:name "out" :at [400 -48] :rot 14}]
+ :texts [{:at [96 176] :text ".noise V(out) V1 dec 1001 10 1Meg" :directive true}
+         {:at [96 208] :text ".plot onoise_spectrum" :directive true}
+         {:at [96 240] :text ".plot inoise_spectrum" :directive true}
+         {:at [96 272] :text "Output and input noise in V/√Hz. The integrated totals, v(onoise_total) and v(inoise_total), are in the Values table."}
+         {:at [96 304] :text "Other sweeps: .noise V(out) V1 oct 10 10 1Meg, or .noise V(out) V1 lin 101 10 1Meg (101 frequencies)."}
+         {:at [96 336] :text "A reference node, .noise V(out,in) V1 dec 10 10 1Meg, runs on ngspice only."}]
+ :waves {:plot "noise" :panes [["onoise_spectrum" "V(in)"] ["inoise_spectrum"]]}}

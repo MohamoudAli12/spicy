@@ -1,0 +1,30 @@
+;; spicy schematic (EDN)
+{:spicy-schematic 1
+ :components [{:symbol "voltage" :ref "V1" :value "PULSE(0 1 0 1n 1n 5u 10u)" :at [0 0]}
+              {:symbol "res" :ref "R1" :value "1k" :at [320 -48] :rot 90}
+              {:symbol "cap" :ref "C1" :value "1n" :at [416 16]}]
+ :wires [[0 -32 224 -32] [0 96 0 128] [0 128 432 128] [0 16 0 -32]
+         [432 128 432 80] [432 16 432 -32] [144 -80 144 -32] [304 -32 432 -32]
+         [336 -80 336 -32]]
+ :flags [{:name "0" :at [0 128]}
+         {:name "in" :at [144 -80]}
+         {:name "out" :at [336 -80]}]
+ :texts [{:at [0 176] :text "Measurements, computed by spicy from the results: see the Measurements table in the viewer."}
+         {:at [0 208] :text ".tran 20n 10u" :directive true}
+         {:at [0 240] :text ".plot V(in), V(out)" :directive true}
+         {:at [0 272] :text "Over the whole run, or between FROM= and TO=:"}
+         {:at [0 304] :text ".meas tran vmax MAX V(out)" :directive true}
+         {:at [0 336] :text ".meas tran vmin MIN V(out) FROM=5u TO=10u" :directive true}
+         {:at [0 368] :text ".meas tran vavg AVG V(out)" :directive true}
+         {:at [0 400] :text ".meas tran vrms RMS V(out)" :directive true}
+         {:at [0 432] :text ".meas tran vpp PP V(out) FROM=0 TO=5u" :directive true}
+         {:at [0 464] :text ".meas tran charge INTEG I(C1)" :directive true}
+         {:at [0 496] :text "The value at one point:"}
+         {:at [0 528] :text ".meas tran v2us FIND V(out) AT=2u" :directive true}
+         {:at [0 560] :text "The time between two crossings: RISE=, FALL= or CROSS= (either direction) pick the edge."}
+         {:at [0 592] :text ".meas tran trise TRIG V(out) VAL=0.1 RISE=1 TARG V(out) VAL=0.9 RISE=1" :directive true}
+         {:at [0 624] :text ".meas tran tfall TRIG V(out) VAL=0.9 FALL=1 TARG V(out) VAL=0.1 FALL=1" :directive true}
+         {:at [0 656] :text ".meas tran tdelay TRIG V(in) VAL=0.5 CROSS=1 TARG V(out) VAL=0.5 CROSS=1" :directive true}
+         {:at [0 688] :text "The target's count starts after the trigger: the delay after the second edge of V(in)."}
+         {:at [0 720] :text ".meas tran tdelay2 TRIG V(in) VAL=0.5 CROSS=2 TARG V(out) VAL=0.5 CROSS=1" :directive true}]
+ :waves {:plot "tran" :panes [["V(in)" "V(out)"]]}}

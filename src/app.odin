@@ -346,9 +346,11 @@ on_run_done :: proc(d: ^Doc) {
 		message(tcat(r.sim_name, " failed"), msg)
 		return
 	}
-	// first: the .plot directives may add warnings
+	// first: the .plot and .meas directives may add warnings
+	meas_run(r, &d.sch, doc_sim(d))
 	wave_new_run(&d.wave, r, &d.sch, doc_sim(d))
 	status(r.message)
+	if len(r.measures) > 0 do status(strings.join(r.measures[:], "  ·  ", context.temp_allocator))
 	if len(r.warnings) > 0 do status(fmt.tprintf("%s – %d warning%s (View › Simulator log)", r.message, len(r.warnings), "" if len(r.warnings) == 1 else "s"))
 	if S.show_waves != "never" do app.show_waves = true
 	// probe straight away, whatever tool was active (placing parts, drawing wires …),
@@ -496,7 +498,7 @@ run_action :: proc(name: string) {
 	case "wave/export-csv":
 		dialog_open(.Export_CSV)
 	case "wave/next-plot":
-		wave_next_plot(&d.wave, &d.run)
+		wave_next_plot(&d.wave, &d.run, &d.sch, doc_sim(d))
 	case "help/shortcuts":
 		dialog_open(.Shortcuts)
 	case "help/settings":

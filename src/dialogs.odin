@@ -1128,7 +1128,7 @@ draw_trace_dialog :: proc(d: ^Doc) {
 	for n in ni.names do if n != "0" do append(&names, tcat("V(", n, ")"))
 	for c in d.sch.comps do append(&names, tcat("I(", c.ref, ")"))
 	hint := strings.join(names[:min(len(names), 40)], "  ", context.temp_allocator)
-	draw_wrapped(tcat("Functions: db ph mag re im abs sqrt exp ln log10 d (derivative) int (integral) min max. Signals: ", hint), cut_top(&b, b.h - fs() - 20), th.muted, fs(0.9))
+	draw_wrapped(tcat("Functions: db ph mag re im abs sqrt exp ln log10 d (derivative) int (integral) min max if(cond, a, b). Signals: ", hint), cut_top(&b, b.h - fs() - 20), th.muted, fs(0.9))
 	res := buttons(&b, "OK", true, len(strings.trim_space(dl.name)) > 0)
 	if res < 0 do dialog_close()
 	if res > 0 {

@@ -1,6 +1,7 @@
 package spicy
 
 import "core:fmt"
+import "core:strconv"
 import "core:strings"
 
 // Netlist generation: SPICE (ngspice, Xyce …) or VACASK.
@@ -135,8 +136,11 @@ Netlist :: struct {
 	// Xyce: "tran" or "dc" when the run asks for its results with a .print … format=raw line
 	// (Xyce's -r raw file has no device currents: no I(R1)), and what that line prints
 	xyce_print: string,
+	xyce_noise_only: bool, // a Xyce netlist whose only analysis is .noise (Xyce runs just that one)
 	xyce_vars:  string,
 	plot_traces: []string, // the expressions of the .plot directives: shown after the run
+	meas_lines:  []string, // the arguments of the .meas directives: measured after the run
+	steps:       []Step_Value, // the .step values: one simulator run each
 }
 
 // Directive blocks can be limited to one simulator or dialect with a first line such as
@@ -258,6 +262,9 @@ netlist_build :: proc(s: ^Schematic, sim: ^Simulator_Def, title: string, base_di
 	for w in nl.nets.warnings do append(&nl.warnings, w)
 	nl.plot_traces = plot_requests(s, sim)
 	plot_validate(&nl, s)
+	nl.meas_lines = card_lines(s, sim, ".meas")
+	meas_check(&nl, s)
+	step_check(&nl, sim, card_lines(s, sim, ".step"))
 	if sim.dialect == "vacask" {
 		nl.text = netlist_vacask(&nl, s, sim, title)
 	} else {
@@ -290,7 +297,7 @@ directive_lines :: proc(s: ^Schematic, sim: ^Simulator_Def) -> []string {
 		body, ok := directive_for(t.text, sim)
 		if !ok do continue
 		for l in split_lines(body) {
-			if _, is_plot := plot_line_args(l); is_plot do continue // for the waveform viewer, not the simulator
+			if spicy_card_line(l) do continue // .plot, .meas, .step: for spicy, not the simulator
 			if !is_blank(l) do append(&out, strings.trim_right_space(l))
 		}
 	}
@@ -449,6 +456,22 @@ netlist_spice :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: s
 	// Xyce writes resistor, capacitor, diode … currents only when asked for them: every voltage
 	// and two-pin current (V(*) I(*)), and the pin currents of transistors (IC(Q1) …)
 	if sim_is_xyce(sim) {
+		// Xyce runs one analysis per netlist: with a .noise, the other analyses are not run
+		noise, others := false, 0
+		for l in dl {
+			low := lower(strings.trim_space(l))
+			if strings.has_prefix(low, ".noise") {
+				noise = true
+				// Xyce 7.10 rejects a reference node, V(out,ref), with a message about PTS_PER_SUMMARY
+				open := strings.index_byte(low, '(')
+				close := strings.index_byte(low, ')')
+				if open >= 0 && close > open && strings.contains(low[open:close], ",") {
+					append(&nl.errors, tcat(".noise \"", strings.trim_space(strings.trim_space(l)[len(".noise"):]), "\": Xyce does not accept a reference node in the output. Correct: .noise V(out) V1 dec 10 10 1Meg (or run V(out,ref) on ngspice)"))
+				}
+			} else if strings.has_prefix(low, ".tran") || strings.has_prefix(low, ".ac") || strings.has_prefix(low, ".dc") || strings.has_prefix(low, ".op") do others += 1
+		}
+		nl.xyce_noise_only = noise && others == 0
+		if noise && others > 0 do append(&nl.warnings, "Xyce runs only the .noise analysis of this schematic: its .tran, .ac, .dc and .op are not run (use ngspice or VACASK to run them together)")
 		for l in dl {
 			low := lower(strings.trim_space(l))
 			if strings.has_prefix(low, ".tran") do nl.xyce_print = "tran"
@@ -1088,7 +1111,7 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 	model_cards := make([dynamic]string, context.temp_allocator)
 	verbatim := make([dynamic]string, context.temp_allocator)
 	user_opts := make([dynamic][2]string, context.temp_allocator) // from .options
-	n_op, n_tran, n_ac, n_dc := 0, 0, 0, 0
+	n_op, n_tran, n_ac, n_dc, n_noise := 0, 0, 0, 0, 0
 	// .ic v(node)=value v(a,b)=value
 	for l in dl {
 		t := strings.trim_space(l)
@@ -1164,7 +1187,15 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 				append(&nl.errors, ".ac needs: dec|oct|lin points fstart fstop")
 				continue
 			}
-			append(&control, fmt.tprintf("analysis ac%d ac from=%s to=%s mode=\"%s\" points=%s", n_ac, vacask_value(f[3]), vacask_value(f[4]), lower(f[1]), f[2]))
+			append(&control, fmt.tprintf("analysis ac%d ac from=%s to=%s mode=\"%s\" points=%s", n_ac, vacask_value(f[3]), vacask_value(f[4]), lower(f[1]), vacask_points(f[1], f[2])))
+		case ".noise":
+			// .noise V(out) V1 dec points fstart fstop: after replace_parens, f = .noise V out V1 dec points fstart fstop
+			if len(f) < 8 || lower(f[1]) != "v" || strings.contains(f[2], ",") {
+				append(&nl.errors, ".noise needs: V(out) source dec|oct|lin points fstart fstop (one output node)")
+				continue
+			}
+			n_noise += 1
+			append(&control, fmt.tprintf("analysis noise%d noise out=[\"%s\"] in=\"%s\" from=%s to=%s mode=\"%s\" points=%s", n_noise, vacask_name(f[2]), vacask_name(f[3]), vacask_value(f[6]), vacask_value(f[7]), lower(f[4]), vacask_points(f[4], f[5])))
 		case ".dc":
 			n_dc += 1
 			if len(f) < 5 {
@@ -1186,7 +1217,7 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 			append(&nl.warnings, fmt.tprintf("VACASK: \"%s\" is ignored (put VACASK lines in a directive starting with #vacask)", t))
 		}
 	}
-	if n_op + n_tran + n_ac + n_dc == 0 && !strings.contains(strings.join(verbatim[:], "\n", context.temp_allocator), "analysis") {
+	if n_op + n_tran + n_ac + n_dc + n_noise == 0 && !strings.contains(strings.join(verbatim[:], "\n", context.temp_allocator), "analysis") {
 		append(&nl.errors, "no analysis: add a .tran, .ac, .dc or .op directive (Simulate › Edit simulation command)")
 	}
 	// models: from directives, libraries and defaults
@@ -1352,4 +1383,15 @@ spice_subckt_instance :: proc(nl: ^Netlist, b: ^strings.Builder, c: ^Comp, sym: 
 has_switch_model :: proc(models: []string) -> bool {
 	for m in models do if strings.contains(m, "spicy_vsw") do return true
 	return false
+}
+
+// The points of a VACASK sweep. For lin, SPICE gives the number of frequencies and VACASK the
+// number of intervals (points + 1 frequencies), so lin N becomes N - 1: the same frequencies.
+// dec and oct count points per decade or octave on both.
+@(private = "file")
+vacask_points :: proc(mode, points: string) -> string {
+	if lower(mode) != "lin" do return points
+	n, ok := strconv.parse_int(points)
+	if !ok || n < 2 do return points
+	return fmt.tprintf("%d", n - 1)
 }
