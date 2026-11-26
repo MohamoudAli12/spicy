@@ -82,6 +82,7 @@ cli_sim :: proc(sch: ^Schematic, args: []string) -> ^Simulator_Def {
 }
 
 main :: proc() {
+	win_console_attach() // Windows: print to the terminal spicy was started from
 	rest0, level, log_file, log_err := log_parse_args(os.args[1:])
 	rest := out_fmt_parse(rest0)
 	// answered before the log file is opened: these never touch the disk

@@ -76,6 +76,8 @@ make            # optimised build -> ./spicy
 make install    # install to ~/.local/bin
 ```
 
+On Windows spicy is built as a GUI program (`-subsystem:windows`, which the Makefile and CI add), so no console window opens with it. Run from a terminal, its command-line options still print there.
+
 Prebuilt binaries for Linux (x86_64, arm64), macOS (universal) and Windows are published on the releases page.
 
 You also need at least one simulator on your `PATH`: [ngspice](https://ngspice.sourceforge.io), [Xyce](https://xyce.sandia.gov) or [VACASK](https://codeberg.org/arpadbuermen/VACASK). If a simulator isn't on your `PATH`, point spicy at it:

@@ -19,6 +19,10 @@ VERSION  ?= dev-$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 VERSION  := $(patsubst dev-unknown,dev,$(VERSION))
 
 ODINFLAGS ?=
+# Windows: a GUI program, so no console window opens with it (src/win_console_windows.odin)
+ifeq ($(OS),Windows_NT)
+ODINFLAGS += -subsystem:windows
+endif
 
 SRC := $(wildcard src/*.odin) $(wildcard config/*.edn) symbols/standard.edn models/standard.lib
 

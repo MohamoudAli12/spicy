@@ -84,8 +84,14 @@ jobs:
           SPICY_CONFIG_DIR="$PWD/build/testcfg" odin test tests -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false -out:"build/spicy-tests$EXE"
 
       - name: Build
-        if: runner.os != 'macOS'
-        run: odin build src -out:"spicy$EXE" -o:speed -define:SPICY_VERSION="v$VERSION"
+        if: runner.os == 'Linux'
+        run: odin build src -out:spicy -o:speed -define:SPICY_VERSION="v$VERSION"
+
+      # a GUI program: Windows opens no console window for it (it borrows the terminal it
+      # is started from, see src/win_console_windows.odin)
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: odin build src -out:spicy.exe -o:speed -subsystem:windows -define:SPICY_VERSION="v$VERSION"
 
       - name: Build (macOS universal)
         if: runner.os == 'macOS'
