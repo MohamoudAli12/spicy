@@ -247,9 +247,11 @@ theme_apply :: proc() {
 	want := theme_wanted()
 	for t in themes do if t.name == want {
 		th = t
+		titlebar_apply_all()
 		return
 	}
 	if len(themes) > 0 do th = themes[0]
+	titlebar_apply_all()
 }
 
 trace_color :: proc(i: int) -> Color {

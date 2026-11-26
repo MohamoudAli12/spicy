@@ -1110,6 +1110,8 @@ gui_main :: proc(files: []string) {
 	flags: rl.ConfigFlags = {.WINDOW_RESIZABLE, .WINDOW_HIGHDPI}
 	if S.antialias do flags += {.MSAA_4X_HINT}
 	if S.vsync do flags += {.VSYNC_HINT}
+	// Windows: shown once the title bar has the theme's colours (below), never white first
+	when ODIN_OS == .Windows do flags += {.WINDOW_HIDDEN}
 	rl.SetConfigFlags(flags)
 	log.infof("spicy %s starting (%s/%s, log level %s%s)", SPICY_VERSION, ODIN_OS, ODIN_ARCH, level_name(log_level()), tcat(", log file ", log_file_path()) if len(log_file_path()) > 0 else "")
 	rl.SetTraceLogLevel(.INFO) // its INFO lines go to the log at DEBUG (GPU details for the diagnostics)
@@ -1133,6 +1135,14 @@ gui_main :: proc(files: []string) {
 	// the test hooks count frames: no sleeping then
 	idle_init(len(os.get_env("SPICY_SCREENSHOT", context.temp_allocator)) == 0 && len(os.get_env("SPICY_ACTIONS", context.temp_allocator)) == 0)
 	if pref_bool("maximized") do rl.MaximizeWindow()
+	when ODIN_OS == .Windows {
+		titlebar_apply_all()
+		// one frame in the theme's background, then show it: no white window either
+		rl.BeginDrawing()
+		rl.ClearBackground(rlc(th.bg))
+		rl.EndDrawing()
+		rl.ClearWindowState({.WINDOW_HIDDEN})
+	}
 	ui_scale = S.scale if S.scale > 0 else default_ui_scale()
 	ui.submenu_fn = view_submenu
 	fonts_init()
