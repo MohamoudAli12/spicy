@@ -224,6 +224,51 @@ ltspice_import :: proc(t: ^testing.T) {
 	testing.expect(t, s.texts[0].directive)
 }
 
+// LTspice orientations: Rn turns clockwise; Mn turns and then mirrors x. pnp and pmos have
+// LTspice's npn / nmos pinout (collector / drain at the top). Pins land where LTspice has them,
+// and the orientation survives saving.
+ASC_ORIENT :: `Version 4
+SHEET 1 880 680
+SYMBOL res 0 0 M90
+SYMBOL pnp 0 0 R0
+SYMBOL pmos 256 224 M270
+SYMBOL npn 0 0 M270
+`
+
+@(test)
+ltspice_import_orientation :: proc(t: ^testing.T) {
+	setup()
+	s, _, err := C.asc_import(transmute([]u8)string(ASC_ORIENT))
+	testing.expect_value(t, err, "")
+	testing.expect_value(t, len(s.comps), 4)
+	pin :: proc(c: ^C.Comp, name: string) -> C.P {
+		sym := C.symbol_find(c.sym)
+		for p, i in sym.pins do if p.name == name do return C.comp_pin(c, sym, i)
+		return {-1, -1}
+	}
+	check :: proc(t: ^testing.T, s: ^C.Schematic, k: int, name: string, want: C.P) {
+		got := pin(&s.comps[k], name)
+		testing.expectf(t, got == want, "%s pin %s: %v, want %v", s.comps[k].sym, name, got, want)
+	}
+	check(t, &s, 0, "A", {16, 16})
+	check(t, &s, 0, "B", {96, 16})
+	check(t, &s, 1, "C", {64, 0})
+	check(t, &s, 1, "B", {0, 48})
+	check(t, &s, 1, "E", {64, 96})
+	check(t, &s, 2, "D", {256, 176})
+	check(t, &s, 2, "G", {176, 224})
+	check(t, &s, 2, "S", {160, 176})
+	check(t, &s, 3, "C", {0, -64}) // npn M270: (x, y) → (-y, -x)
+	check(t, &s, 3, "B", {-48, 0})
+	check(t, &s, 3, "E", {-96, -64})
+	back, berr := C.sch_from_edn(C.sch_to_edn(&s))
+	testing.expect_value(t, berr, "")
+	for c, i in s.comps {
+		testing.expectf(t, back.comps[i].rot == c.rot && back.comps[i].mirror == c.mirror && back.comps[i].pos == c.pos,
+			"%s orientation changes when saved: rot %d → %d", c.sym, c.rot, back.comps[i].rot)
+	}
+}
+
 // Every built-in symbol written out by the symbol editor reads back the same.
 @(test)
 symbol_edn_round_trip :: proc(t: ^testing.T) {

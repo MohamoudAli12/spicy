@@ -14,8 +14,14 @@ ASC_SYMBOLS := [?][2]string {
 	{"voltage", "voltage"}, {"current", "current"}, {"bv", "bv"}, {"bi", "bi"}, {"bi2", "bi"},
 	{"e", "e"}, {"e2", "e"}, {"g", "g"}, {"g2", "g"},
 	{"npn", "npn"}, {"npn2", "npn"}, {"pnp", "pnp"}, {"pnp2", "pnp"},
-	{"nmos", "nmos"}, {"pmos", "pmos"}, {"opamp", "opamp"},
+	{"nmos", "nmos"}, {"pmos", "pmos"}, {"opamp", "opamp"}, {"sw", "sw"},
 }
+
+// LTspice draws pnp and pmos with the same pinout as npn and nmos (collector / drain at the
+// top); spicy's have the emitter / source at the top. Upside down they match pin for pin, so
+// these are placed flipped vertically about the middle of the part (y = ASC_FLIP_H / 2).
+ASC_FLIPPED := [?]string{"pnp", "pmos"}
+ASC_FLIP_H :: 96
 
 // LTspice writes UTF-16 LE (with or without BOM) or plain 8-bit text.
 decode_text :: proc(data: []u8) -> string {
@@ -80,7 +86,17 @@ asc_import :: proc(data: []u8) -> (s: Schematic, warnings: [dynamic]string, err:
 			o := f[4]
 			mirror := len(o) > 0 && o[0] == 'M'
 			deg, _ := strconv.parse_int(o[1:])
-			append(&s.comps, Comp{sym = strings.clone(mapped), pos = {num(f[2]), num(f[3])}, rot = u8((deg / 90) % 4), mirror = mirror, attrs = make([dynamic]Attr)})
+			// LTspice's Mn rotates by n and then mirrors; spicy mirrors and then rotates, so a
+			// mirrored part turns the other way (M90 = mirror + 270, M270 = mirror + 90).
+			q := u8((deg / 90) % 4)
+			if mirror do q = (4 - q) % 4
+			pos := P{num(f[2]), num(f[3])}
+			for fl in ASC_FLIPPED do if fl == lt {
+				// flipping y is mirror + half turn; then LTspice's own orientation on top
+				pos = xform_p(pos, q, mirror, {0, ASC_FLIP_H})
+				q, mirror = (q + 2) % 4, !mirror
+			}
+			append(&s.comps, Comp{sym = strings.clone(mapped), pos = pos, rot = q, mirror = mirror, attrs = make([dynamic]Attr)})
 			cur = len(s.comps) - 1
 		case "SYMATTR":
 			if cur < 0 || len(f) < 2 do continue

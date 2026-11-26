@@ -507,7 +507,7 @@ sch_to_edn :: proc(s: ^Schematic) -> string {
 	for c, i in s.comps {
 		if i > 0 do strings.write_string(&b, "\n              ")
 		fmt.sbprintf(&b, "{{:symbol %s :ref %s :value %s :at [%d %d]", edn_quoted(c.sym), edn_quoted(c.ref), edn_quoted(c.value), c.pos.x, c.pos.y)
-		if c.rot != 0 do fmt.sbprintf(&b, " :rot %d", c.rot * 90)
+		if c.rot != 0 do fmt.sbprintf(&b, " :rot %d", int(c.rot) * 90)
 		if c.mirror do strings.write_string(&b, " :mirror true")
 		if len(c.attrs) > 0 {
 			strings.write_string(&b, " :attrs {")
@@ -528,7 +528,7 @@ sch_to_edn :: proc(s: ^Schematic) -> string {
 	for f, i in s.flags {
 		if i > 0 do strings.write_string(&b, "\n         ")
 		fmt.sbprintf(&b, "{{:name %s :at [%d %d]", edn_quoted(f.name), f.pos.x, f.pos.y)
-		if f.rot != 0 do fmt.sbprintf(&b, " :rot %d", f.rot * 90)
+		if f.rot != 0 do fmt.sbprintf(&b, " :rot %d", int(f.rot) * 90)
 		strings.write_string(&b, "}")
 	}
 	strings.write_string(&b, "]\n :texts [")
