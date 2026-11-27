@@ -86,7 +86,7 @@ dialog_open :: proc(k: Dialog_Kind) {
 		for s, i in S.simulators do if i < len(dl.f) && len(s.command) > 0 do set_str(&dl.f[i], s.command[0])
 	case .Appearance:
 		appearance_open()
-	case .None, .Part_Edit, .Text_Edit, .Text_View, .Shortcuts, .Confirm_Close, .Message, .About, .Diagnostics, .Trace_Edit:
+	case .None, .Part_Edit, .Text_Edit, .Text_View, .Shortcuts, .Confirm_Close, .Message, .About, .Diagnostics, .Trace_Edit, .Import_Repair:
 	}
 }
 
@@ -443,6 +443,7 @@ draw_dialog :: proc() {
 	case .Diagnostics: draw_diagnostics()
 	case .Trace_Edit: draw_trace_dialog(d)
 	case .Appearance: draw_appearance()
+	case .Import_Repair: draw_import_repair(d)
 	}
 	dl.first_frame = false
 	ui.modal = dl.kind != .None
@@ -1001,6 +1002,74 @@ draw_text_view :: proc() {
 	if buttons(&bot, "Close", false) != 0 {
 		ui.scroll[id_of("dlg.view")] = 0
 		dialog_close()
+	}
+}
+
+// A model file with faults (import_model): what spicy would repair and what the user should
+// check, then Repair and import / Import as is / Cancel. Only the copy is repaired.
+@(private = "file")
+draw_import_repair :: proc(d: ^Doc) {
+	dl := &app.dlg
+	b := dialog_frame(900, 660)
+	title(&b, dl.title)
+	intro: string
+	if app.import_fixes > 0 {
+		intro = fmt.tprintf("spicy found %d fault(s) it can repair. ngspice lets most of them through, sometimes silently losing a value; Xyce and VACASK stop at them. Repairing changes only the copy spicy keeps in its models folder, not %s.", app.import_fixes, base_name(app.import_path))
+	} else {
+		intro = "Nothing to repair, but some things spicy cannot decide for you. Check them in the datasheet; the file is imported unchanged."
+	}
+	if app.import_checks > 0 && app.import_fixes > 0 do intro = tcat(intro, fmt.tprintf(" %d other thing(s) are only listed, to check yourself.", app.import_checks))
+	ir := cut_top(&b, fs() * 4.2)
+	draw_wrapped(intro, ir, th.fg)
+	cut_top(&b, 6)
+	bot := cut_bottom(&b, fs() + 16)
+	cut_bottom(&b, 8)
+	fill_round(b, th.input, 4)
+	lr := r_inset(b, 6)
+	sz := fs(0.95)
+	lines := split_lines(dl.text)
+	sc := scroll_begin("dlg.repair", lr)
+	selectable_begin("dlg.repair.sel", lr, sc, dl.text)
+	in_checks := false
+	for l, i in lines {
+		if strings.has_prefix(l, "To check") || strings.has_prefix(l, "Where (to check)") do in_checks = true
+		else if strings.has_prefix(l, "Repairs") || strings.has_prefix(l, "Where (repairs)") do in_checks = false
+		y := lr.y + f32(i) * (sz + 4) - sc
+		if y < lr.y - sz || y > lr.y + lr.h do continue
+		col := th.fg
+		if len(l) > 0 && l[0] != ' ' do col = th.accent // headings
+		else if in_checks do col = th.warn
+		draw_mono(l, lr.x, y, col, sz)
+	}
+	selectable_end()
+	scroll_end("dlg.repair", lr, f32(len(lines)) * (sz + 4) + 10)
+	if button("dlg.copy", cut_left(&bot, 100 * ui_scale), "Copy") {
+		rl.SetClipboardText(cstr(dl.text))
+		status("copied")
+	}
+	res := 0 // 1 repair and import, 2 as is, -1 cancel
+	main_label := "Repair and import" if app.import_fixes > 0 else "Import"
+	if button("dlg.ok", cut_right(&bot, max(text_w(main_label) + 40, 96 * ui_scale)), main_label, true, true) do res = 1
+	cut_right(&bot, 8)
+	if app.import_fixes > 0 {
+		if button("dlg.asis", cut_right(&bot, text_w("Import as is") + 40), "Import as is") do res = 2
+		cut_right(&bot, 8)
+	}
+	if button("dlg.cancel", cut_right(&bot, 96 * ui_scale), "Cancel") do res = -1
+	if !dl.first_frame {
+		if key_pressed(.ENTER) || key_pressed(.KP_ENTER) do res = 1
+		if key_pressed(.ESCAPE) && ui.popup_id == 0 do res = -1
+	}
+	if res == 0 do return
+	ui.scroll[id_of("dlg.repair")] = 0
+	path := strings.clone(app.import_path, context.temp_allocator)
+	dialog_close()
+	switch res {
+	case 1: import_model_apply(d, path, app.import_fixes > 0)
+	case 2: import_model_apply(d, path, false)
+	case -1:
+		app.import_for = -1
+		status("import cancelled")
 	}
 }
 

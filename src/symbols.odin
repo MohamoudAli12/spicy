@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:log"
 import "core:math"
 import os "core:os"
+import "core:slice"
 import "core:strings"
 
 // Symbol library: symbols/standard.edn is built in; .edn files in the data folder's
@@ -61,6 +62,7 @@ Symbol :: struct {
 }
 
 symbols: [dynamic]Symbol
+symbols_gen: int // bumped whenever symbols change (the parts picker rebuilds its list then)
 
 symbol_find :: proc(name: string) -> ^Symbol {
 	for &s in symbols do if s.name == name do return &s
@@ -71,6 +73,7 @@ user_symbols_dir :: proc() -> string {return path_join(data_dir(), "symbols")}
 
 symbols_load :: proc() {
 	clear(&symbols)
+	symbols_gen += 1
 	parse_symbols(DEFAULT_SYMBOLS, "built-in symbols")
 	dirs := make([dynamic]string, context.temp_allocator)
 	ud := user_symbols_dir()
@@ -157,6 +160,7 @@ parse_symbols :: proc(text, src: string) {
 			replaced = true
 		}
 		if !replaced do append(&symbols, s)
+		symbols_gen += 1
 	}
 }
 
@@ -340,18 +344,19 @@ symbol_bounds :: proc(s: ^Symbol) {
 
 // Symbols that can be placed (sorted by category, then description) for the part picker.
 symbols_by_category :: proc() -> []^Symbol {
-	out := make([dynamic]^Symbol, context.temp_allocator)
-	for &s in symbols do append(&out, &s)
-	for i in 1 ..< len(out) {
-		j := i
-		for j > 0 {
-			a, b := out[j - 1], out[j]
-			if a.category < b.category || (a.category == b.category && lower(a.desc) <= lower(b.desc)) do break
-			out[j - 1], out[j] = out[j], out[j - 1]
-			j -= 1
-		}
+	Keyed :: struct {
+		s:   ^Symbol,
+		key: string,
 	}
-	return out[:]
+	k := make([]Keyed, len(symbols), context.temp_allocator)
+	for &s, i in symbols do k[i] = {&s, lower(s.desc)}
+	slice.stable_sort_by(k, proc(a, b: Keyed) -> bool {
+		if a.s.category != b.s.category do return a.s.category < b.s.category
+		return a.key < b.key
+	})
+	out := make([]^Symbol, len(k), context.temp_allocator)
+	for x, i in k do out[i] = x.s
+	return out
 }
 
 // A symbol as an EDN map with everything written out (no :like), in the library format.

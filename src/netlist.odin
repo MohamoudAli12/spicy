@@ -2,6 +2,7 @@ package spicy
 
 import "core:fmt"
 import "core:strconv"
+import "core:slice"
 import "core:strings"
 
 // Netlist generation: SPICE (ngspice, Xyce …) or VACASK.
@@ -21,9 +22,10 @@ Lib_Entry :: struct {
 
 model_lib: [dynamic]Lib_Entry
 
+// The first entry of a name wins (lib_find): the libraries in settings.edn, then the imported
+// ones, then spicy's built-in models, so a manufacturer's BSS84 replaces the generic one.
 models_load :: proc() {
 	clear(&model_lib)
-	parse_lib(DEFAULT_MODELS_LIB, "built-in models")
 	for p in S.model_libraries {
 		text, ok := read_text(p, context.temp_allocator)
 		if !ok {
@@ -33,6 +35,7 @@ models_load :: proc() {
 		parse_lib(strings.clone(text), p)
 	}
 	models_load_user()
+	parse_lib(DEFAULT_MODELS_LIB, "built-in models")
 }
 
 // Reads the .model and .subckt cards of a SPICE library (continuation lines joined).
@@ -40,6 +43,13 @@ parse_lib :: proc(text, src: string) {parse_lib_into(&model_lib, text, src)}
 
 parse_lib_into :: proc(list: ^[dynamic]Lib_Entry, text, src: string) {
 	lines := split_lines(text)
+	first := len(list^)
+	defer {
+		// subcircuits that use a .model card of the file from outside themselves
+		types := make(map[string]string, 64, context.temp_allocator)
+		for &e in list[first:] do if e.kind != "subckt" do types[e.name] = e.kind
+		for &e in list[first:] do if e.kind == "subckt" && len(e.dev) == 0 do subckt_finish(&e, types)
+	}
 	i := 0
 	for i < len(lines) {
 		l := strings.trim_space(lines[i])
@@ -48,9 +58,21 @@ parse_lib_into :: proc(list: ^[dynamic]Lib_Entry, text, src: string) {
 			card := strings.builder_make(context.temp_allocator)
 			strings.write_string(&card, l)
 			j := i + 1
-			for j < len(lines) && strings.has_prefix(strings.trim_space(lines[j]), "+") {
+			for j < len(lines) {
+				t := strings.trim_space(lines[j])
+				if !strings.has_prefix(t, "+") {
+					// blank and comment lines between the "+" lines (as SPICE reads them)
+					if len(t) > 0 && t[0] != '*' do break
+					k := j
+					for k < len(lines) && (len(strings.trim_space(lines[k])) == 0 || strings.trim_space(lines[k])[0] == '*') do k += 1
+					if k >= len(lines) || !strings.has_prefix(strings.trim_space(lines[k]), "+") do break
+					j = k
+					continue
+				}
 				strings.write_byte(&card, '\n')
-				strings.write_string(&card, strings.trim_space(lines[j]))
+				// "+NK=0.7" as "+ NK=0.7": the parameter on its own
+				strings.write_string(&card, "+ ")
+				strings.write_string(&card, strings.trim_space(t[1:]))
 				j += 1
 			}
 			full := strings.to_string(card)
@@ -143,6 +165,16 @@ Netlist :: struct {
 	steps:       []Step_Value, // the .step values: one simulator run each
 }
 
+// A library card into a SPICE netlist, each line without its indent: Xyce takes an indented
+// line of a subcircuit for something else ("    M1 6 20 5 5 Nmod" in Zetex models gives a
+// singular matrix).
+write_card :: proc(b: ^strings.Builder, text: string) {
+	for l in split_lines(text) {
+		strings.write_string(b, strings.trim_left_space(l))
+		strings.write_byte(b, '\n')
+	}
+}
+
 // Directive blocks can be limited to one simulator or dialect with a first line such as
 // "#vacask", "#ngspice", "#xyce" or "#spice".
 directive_for :: proc(text: string, sim: ^Simulator_Def) -> (body: string, ok: bool) {
@@ -178,6 +210,8 @@ fill_template :: proc(nl: ^Netlist, tmpl: string, c: ^Comp, sym: ^Symbol, pin_no
 			val, found = lower(c.ref) if vacask else c.ref, true
 		case "value":
 			val, found = vacask_value(c.value) if vacask else c.value, true
+			// a model name ("DI_BC807-16"): as its model line names it
+			if vacask && model_lookup(strings.trim_space(c.value), nl.local) != nil do val = vacask_name(strings.trim_space(c.value))
 		case "source":
 			v, err := vacask_source(c.value)
 			if len(err) > 0 do append(&nl.errors, fmt.tprintf("%s: %s", c.ref, err))
@@ -413,8 +447,7 @@ netlist_spice :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: s
 	cards, defaults := needed_models(s, defined, nl.local)
 	emitted := make(map[string]bool, 16, context.temp_allocator)
 	for e in cards {
-		strings.write_string(&b, e.text)
-		strings.write_byte(&b, '\n')
+		write_card(&b, e.text)
 		emitted[e.name] = true
 	}
 	// what those cards and the directives use in turn (the subcircuits and models inside a
@@ -427,8 +460,7 @@ netlist_spice :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: s
 		if emitted[n] || defined[n] do continue
 		e := model_lookup(n, nl.local)
 		if e == nil do continue // (directives and .include files are in defined: they are in the netlist already)
-		strings.write_string(&b, e.text)
-		strings.write_byte(&b, '\n')
+		write_card(&b, e.text)
 		emitted[n] = true
 		card_refs(&queue, e.text)
 	}
@@ -792,6 +824,12 @@ is_number_token :: proc(t: string) -> bool {
 // Model names for VACASK: lower case, and never starting with a digit ("1N4148" would read as 1n).
 vacask_name :: proc(n: string) -> string {
 	l := lower(n)
+	// VACASK names are identifiers: "di_bc807-16" and "s1g-13-f" with '_' for the rest
+	if !is_identifier(l) {
+		b := transmute([]u8)strings.clone(l, context.temp_allocator)
+		for &ch in b do if !((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_') do ch = '_'
+		l = string(b)
+	}
 	if len(l) > 0 && l[0] >= '0' && l[0] <= '9' do return tcat("m_", l)
 	return l
 }
@@ -991,17 +1029,77 @@ vacask_model :: proc(card: string) -> (load: string, line: string, err: string) 
 	case "SW":
 		// no switch in VACASK: a Verilog-A one embedded in the netlist (compiled by VACASK)
 		osdi, module = SPICY_VSW_FILE, "spicy_vsw"
+	case "VSWITCH":
+		// PSpice: RON ROFF VON VOFF (on at VON, off at VOFF; VON < VOFF is a switch that is on
+		// at low voltages) → the same switch with vt halfway, vh half the band and its sense
+		osdi, module = SPICY_VSW_FILE, "spicy_vsw"
+		von, voff := 1.0, 0.0
+		kept := make([dynamic][2]string, context.temp_allocator)
+		for p in params {
+			v, _ := parse_eng(p[1])
+			switch p[0] {
+			case "von": von = v
+			case "voff": voff = v
+			case "ron", "roff": append(&kept, p)
+			case: return "", "", fmt.tprintf("model %s: VSWITCH parameter %s is not available in VACASK", name, p[0])
+			}
+		}
+		clear(&params)
+		append(&params, ..kept[:])
+		append(&params, [2]string{"vt", fmt.tprintf("%.9g", (von + voff) / 2)})
+		append(&params, [2]string{"vh", fmt.tprintf("%.9g", abs(von - voff) / 2)})
+		if von < voff do append(&params, [2]string{"sense", "-1"})
+	case "R", "RES":
+		// resistor model: TC1 TC2 (TCE, TNOM); PSpice's R is a scale factor of the value
+		osdi, module = "spice/resistor.osdi", "sp_resistor"
+		for p in params do if p[0] == "r" {
+			if v, _ := parse_eng(p[1]); v != 1 do return "", "", fmt.tprintf("model %s: the resistance scale factor R=%s is not available in VACASK", name, p[1])
+		}
+		kept := make([dynamic][2]string, context.temp_allocator)
+		for p in params do if p[0] != "r" do append(&kept, p)
+		clear(&params)
+		append(&params, ..kept[:])
 	case:
 		return "", "", fmt.tprintf("model %s: type %s is not supported for VACASK", name, kind)
 	}
 	b := strings.builder_make(context.temp_allocator)
 	fmt.sbprintf(&b, "model %s %s", vacask_name(name), module)
 	if typ != 0 do fmt.sbprintf(&b, " type=%d", typ)
+	dropped := make([dynamic]string, context.temp_allocator)
 	for p in params {
 		if p[0] == "level" || p[0] == "type" do continue
+		if vacask_pspice_only(module, p[0]) do continue
+		if module == "sp_diode" && !slice.contains(VACASK_DIODE_PARAMS, p[0]) {
+			// as ngspice: a parameter the diode does not have is left out (VACASK would stop)
+			append(&dropped, p[0])
+			continue
+		}
 		fmt.sbprintf(&b, " %s=%s", p[0], vacask_value(p[1]))
 	}
+	if len(dropped) > 0 {
+		return osdi, fmt.tprintf("// %s: %s left out (not parameters of VACASK's diode)\n%s", name, strings.join(dropped[:], ", ", context.temp_allocator), strings.to_string(b)), ""
+	}
 	return osdi, strings.to_string(b), ""
+}
+
+// The model parameters of VACASK's sp_diode (devices/spice/diode.va), aliases included.
+@(private = "file")
+VACASK_DIODE_PARAMS := []string{"af", "bv", "bv_max", "cj", "cj0", "cjo", "cjp", "cjsw", "cta", "ctc", "ctp", "eg", "fc", "fcs", "fv_max", "gap1", "gap2", "ib", "ibv", "id_max", "ik", "ikf", "ikp", "ikr", "is", "isr", "isw", "js", "jsw", "jtun", "jtunsw", "keg", "kf", "level", "lm", "lp", "m", "mj", "mjsw", "model_area", "model_lm", "model_lp", "model_pj", "model_wm", "model_wp", "n", "nbv", "nr", "ns", "ntun", "nz", "pb", "pd_max", "php", "qpscale", "rs", "rsw", "tbv1", "tcv", "te_max", "tlev", "tlevc", "tm1", "tm2", "tnom", "tpb", "tphp", "tref", "trs", "trs1", "trs2", "tt", "ttt1", "ttt2", "tvj", "var", "vb", "vj", "vjsw", "vp", "vrb", "wm", "wp", "xm", "xoi", "xom", "xp", "xti", "xtitun", "xw"}
+
+// PSpice parameters of vendor models that VACASK's SPICE modules do not have, as ngspice
+// does not: left out (VACASK stops at a parameter it does not know). T_ABS etc. set one
+// device's temperature, TIKF is IKF's temperature coefficient, N on a MOSFET is the bulk
+// junction's emission coefficient.
+@(private = "file")
+vacask_pspice_only :: proc(module, p: string) -> bool {
+	switch p {
+	case "t_abs", "t_rel_global", "t_rel_local", "t_measured": return true
+	}
+	switch module {
+	case "sp_diode": return p == "tikf"
+	case "sp_mos1", "sp_mos2", "sp_mos3": return p == "n"
+	}
+	return false
 }
 
 @(private = "file")
@@ -1143,6 +1241,16 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 			}
 		}
 	}
+	vacask_own := make(map[string]bool, 16, context.temp_allocator)
+	for tx in s.texts {
+		if !tx.directive do continue
+		tt := strings.trim_left_space(tx.text)
+		if !strings.has_prefix(tt, "#") do continue
+		if body, ok := directive_for(tx.text, sim); ok && body != tx.text {
+			for l in split_lines(body) do vacask_own[strings.trim_space(l)] = true
+		}
+	}
+	spice_elems := make([dynamic]string, context.temp_allocator)
 	in_subckt := false
 	for l in dl {
 		t := strings.trim_space(l)
@@ -1157,7 +1265,13 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 		if _, inc := include_path(t, nl.base_dir); inc do continue
 		if t[0] == '+' do continue
 		if t[0] != '.' {
-			append(&verbatim, t) // VACASK syntax written by the user (#vacask blocks)
+			// SPICE element lines ("V1 in 0 PULSE(…)", "R5 a b 1k") are translated like the
+			// lines of a subcircuit; the lines of #vacask blocks are VACASK syntax
+			if !vacask_own[t] && spice_element_line(t) {
+				append(&spice_elems, t)
+				continue
+			}
+			append(&verbatim, t)
 			continue
 		}
 		f := strings.fields(replace_parens(t), context.temp_allocator)
@@ -1250,6 +1364,15 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 		append(&all_cards, e.text)
 	}
 	for e in sub_needed do vacask_subckt(nl, &vo, e)
+	elem_lines := make([dynamic]string, context.temp_allocator)
+	for t in spice_elems {
+		line, err := vacask_directive_element(nl, &vo, t, defined)
+		if len(err) > 0 {
+			append(&nl.errors, tcat("VACASK: ", err))
+			continue
+		}
+		append(&elem_lines, line)
+	}
 	append(&all_cards, ..defaults[:])
 	for card in all_cards {
 		osdi, line, err := vacask_model(card)
@@ -1273,6 +1396,7 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 	strings.write_string(&b, strings.to_string(vo.defs))
 	strings.write_byte(&b, '\n')
 	strings.write_string(&b, strings.to_string(body))
+	for l in elem_lines do fmt.sbprintf(&b, "%s\n", l)
 	for l in sim.lines do fmt.sbprintf(&b, "%s\n", l)
 	for l in S.extra_lines do fmt.sbprintf(&b, "%s\n", l)
 	ctrl_opts := make([dynamic]string, context.temp_allocator)
@@ -1328,7 +1452,8 @@ SPICY_VSW_FILE :: "spicy_vsw.va"
 
 // Voltage-controlled switch for VACASK, from a SPICE SW model (RON ROFF VT VH). The
 // conductance moves smoothly (log scale) from 1/roff to 1/ron as V(cp,cn) passes vt, over
-// a band vh wide (10 mV when vh is 0); unlike SPICE it has no hysteresis.
+// a band vh wide (10 mV when vh is 0); unlike SPICE it has no hysteresis. sense = -1: on
+// below vt (a PSpice VSWITCH with VON < VOFF).
 SPICY_VSW_VA :: `// spicy: voltage-controlled switch (SPICE SW model) for VACASK
 `+"`"+`include "constants.vams"
 `+"`"+`include "disciplines.vams"
@@ -1340,10 +1465,11 @@ module spicy_vsw(p, n, cp, cn);
     parameter real roff = 1.0e12 from (0:inf);
     parameter real vt = 0.0;
     parameter real vh = 0.0 from [0:inf);
+    parameter real sense = 1.0 from [-1:1] exclude (-1:1);
     real w, alpha, g;
     analog begin
         w = vh > 0 ? 2 * vh : 0.01;
-        alpha = 0.5 * (1.0 + tanh((V(cp, cn) - vt) / (0.25 * w)));
+        alpha = 0.5 * (1.0 + tanh(sense * (V(cp, cn) - vt) / (0.25 * w)));
         g = exp(-(ln(roff) + alpha * (ln(ron) - ln(roff))));
         I(p, n) <+ g * V(p, n);
     end

@@ -361,8 +361,23 @@ expr_validate :: proc(nl: ^Netlist, s: ^Schematic, label, e, example: string) {
 		return
 	}
 	{
+		// elements written in directives ("Vd d 0 1"): their names are parts and their nodes nets
+		dir_parts := make(map[string]bool, 8, context.temp_allocator)
+		dir_nets := make(map[string]bool, 8, context.temp_allocator)
+		for t in s.texts {
+			if !t.directive do continue
+			for l in split_lines(t.text) {
+				ll := strings.trim_space(l)
+				if len(ll) == 0 || ll[0] == '.' || ll[0] == '*' || ll[0] == '#' || ll[0] == '+' || !spice_element_line(ll) do continue
+				f := strings.fields(replace_parens(ll), context.temp_allocator)
+				dir_parts[lower(f[0])] = true
+				for x in f[1:min(len(f), 5)] do dir_nets[lower(x)] = true
+			}
+		}
 		for r in refs {
 			if strings.contains_any(r.name, "@#.:[]$") do continue
+			if r.kind == 'i' && dir_parts[lower(r.name)] do continue
+			if r.kind == 'v' && dir_nets[lower(r.name)] do continue
 			switch r.kind {
 			case 'v':
 				if r.name == "0" || strings.equal_fold(r.name, "gnd") do continue

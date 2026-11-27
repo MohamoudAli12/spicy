@@ -1,6 +1,7 @@
 package spicy
 
 import "core:math"
+import "core:slice"
 import "core:strings"
 
 // The parts picker: every symbol drawn in a grid, grouped by category, with its name and
@@ -55,19 +56,9 @@ parts_panel :: proc(r: Rect, d: ^Doc) -> (picked: bool) {
 		}
 	}
 
-	// the symbols that match, by category
-	q := lower(strings.trim_space(parts_search))
-	list := make([dynamic]^Symbol, context.temp_allocator)
-	for s in symbols_by_category() {
-		if len(q) == 0 || strings.contains(lower(s.name), q) || strings.contains(lower(s.desc), q) || strings.contains(lower(s.category), q) || lower(s.key) == q || lower(action_keys_text(tcat("place/", s.name))) == q do append(&list, s)
-	}
-	for i in 1 ..< len(list) {
-		j := i
-		for j > 0 && category_rank(list[j - 1].category) > category_rank(list[j].category) {
-			list[j - 1], list[j] = list[j], list[j - 1]
-			j -= 1
-		}
-	}
+	// the symbols that match, by category: built again only when something changed
+	parts_list_update(lower(strings.trim_space(parts_search)))
+	list := parts_cache.list[:]
 
 	// grid: cells as wide as fit, at least ~110 px (scaled)
 	cw_min := 112 * ui_scale
@@ -76,39 +67,99 @@ parts_panel :: proc(r: Rect, d: ^Doc) -> (picked: bool) {
 	sym_h := 64 * ui_scale
 	ch := sym_h + fs() * 2 + 18 * ui_scale
 	head_h := fs() + 14 * ui_scale
+	gap := 6 * ui_scale
 	sc := scroll_begin("parts.grid", b)
 	y := b.y - sc
-	cat := ""
-	col := 0
-	for s, i in list {
-		if s.category != cat || i == 0 {
-			// category heading
-			if col != 0 do y += ch
-			col = 0
-			cat = s.category
-			if i > 0 do y += 6 * ui_scale
-			hr := Rect{b.x, y, b.w - 12 * ui_scale, head_h}
-			text_in(hr, cat if len(cat) > 0 else "Other", th.muted, 0, fs(0.95), 2)
+	// only what is in view is drawn: thousands of imported parts stay cheap
+	for g, gi in parts_cache.groups {
+		if gi > 0 do y += gap
+		rows := (g.count + cols - 1) / cols
+		gh := head_h + 4 * ui_scale + f32(rows) * ch
+		if y + gh < b.y || y > b.y + b.h {
+			y += gh
+			continue
+		}
+		hr := Rect{b.x, y, b.w - 12 * ui_scale, head_h}
+		if hr.y + hr.h >= b.y {
+			text_in(hr, g.cat if len(g.cat) > 0 else "Other", th.muted, 0, fs(0.95), 2)
 			line(hr.x, hr.y + hr.h - 2, hr.x + hr.w, hr.y + hr.h - 2, th.border)
-			y += head_h + 4 * ui_scale
 		}
-		cell := Rect{b.x + f32(col) * cw, y, cw - 6 * ui_scale, ch - 6 * ui_scale}
-		if part_cell(s, cell, d) do picked = true
-		col += 1
-		if col == cols {
-			col = 0
-			y += ch
+		y0 := y + head_h + 4 * ui_scale
+		first := max(0, int((b.y - y0) / ch))
+		last := min(rows - 1, int((b.y + b.h - y0) / ch))
+		for row in first ..= last {
+			for c in 0 ..< cols {
+				i := g.start + row * cols + c
+				if i >= g.start + g.count do break
+				cell := Rect{b.x + f32(c) * cw, y0 + f32(row) * ch, cw - gap, ch - gap}
+				if part_cell(list[i].s, list[i].key, cell, d) do picked = true
+			}
 		}
+		y += gh
 	}
-	if col != 0 do y += ch
 	if len(list) == 0 do text_in({b.x, y, b.w, fs() * 2}, "No part matches the search.", th.muted, 1)
 	scroll_end("parts.grid", b, y + sc - b.y + 8)
 	return
 }
 
+@(private = "file")
+Part_Entry :: struct {
+	s:   ^Symbol,
+	key: string, // the shortcut that places it ("" for none)
+}
+
+@(private = "file")
+Part_Group :: struct {
+	cat:          string,
+	start, count: int,
+}
+
+// The picker's list, kept between frames (sorting thousands of symbols every frame is slow).
+@(private = "file")
+parts_cache: struct {
+	gen, agen: int,
+	q:         string,
+	built:     bool,
+	list:      [dynamic]Part_Entry,
+	groups:    [dynamic]Part_Group,
+	keys:      [dynamic]string, // owned key texts
+}
+
+@(private = "file")
+parts_list_update :: proc(q: string) {
+	pc := &parts_cache
+	if pc.built && pc.gen == symbols_gen && pc.agen == actions_gen && pc.q == q do return
+	pc.built, pc.gen, pc.agen = true, symbols_gen, actions_gen
+	delete(pc.q)
+	pc.q = strings.clone(q)
+	for k in pc.keys do delete(k)
+	clear(&pc.keys)
+	clear(&pc.list)
+	clear(&pc.groups)
+	// shortcut of each symbol, in one pass over the actions
+	keys := make(map[string]string, context.temp_allocator)
+	for &a in actions do if strings.has_prefix(a.name, "place/") && len(a.keys) > 0 {
+		keys[a.name[len("place/"):]] = chord_name(a.keys[0])
+	}
+	for s in symbols_by_category() {
+		k := keys[s.name]
+		if len(q) == 0 || strings.contains(lower(s.name), q) || strings.contains(lower(s.desc), q) || strings.contains(lower(s.category), q) || lower(s.key) == q || lower(k) == q {
+			kc := strings.clone(k)
+			append(&pc.keys, kc)
+			append(&pc.list, Part_Entry{s, kc})
+		}
+	}
+	// the categories in CATEGORY_ORDER, the rest after them (still alphabetical)
+	slice.stable_sort_by(pc.list[:], proc(a, b: Part_Entry) -> bool {return category_rank(a.s.category) < category_rank(b.s.category)})
+	for e, i in pc.list {
+		if i == 0 || e.s.category != pc.list[i - 1].s.category do append(&pc.groups, Part_Group{cat = e.s.category, start = i})
+		pc.groups[len(pc.groups) - 1].count += 1
+	}
+}
+
 // One cell: the symbol, its name and its shortcut. True when clicked (placing starts).
 @(private = "file")
-part_cell :: proc(s: ^Symbol, r: Rect, d: ^Doc) -> bool {
+part_cell :: proc(s: ^Symbol, k: string, r: Rect, d: ^Doc) -> bool {
 	id := id_of(tcat("parts.", s.name))
 	h := hover(r)
 	placing := d != nil && d.tool == .Place && ((s.kind == .Part && d.place_kind == .Part && d.place_sym == s.name) || (s.kind == .Ground && d.place_kind == .Ground))
@@ -130,7 +181,6 @@ part_cell :: proc(s: ^Symbol, r: Rect, d: ^Doc) -> bool {
 	// the name, and the shortcut under it
 	ny := r.y + 64 * ui_scale + 2
 	text_in({r.x, ny, r.w, fs() + 2}, fit_text(part_short_name(s), r.w - 8), th.fg, 1, 0, 0)
-	k := action_keys_text(tcat("place/", s.name))
 	text_in({r.x, ny + fs() + 2, r.w, fs(0.9) + 2}, k if len(k) > 0 else "–", th.accent if len(k) > 0 else th.muted, 1, fs(0.85), 0)
 	if h {
 		ui.hot = id

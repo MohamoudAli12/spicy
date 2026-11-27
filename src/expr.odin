@@ -424,14 +424,56 @@ probe_current :: proc(p: ^Parser, tag, ref: string) -> Expr_Val {
 		}
 	}
 	append(&cands, tcat("i(", ref, ")"), tcat("i(@", lower(ref), "[i", tag, "])"), tcat(lower(ref), ":flow(br)"), tcat(ref, "#branch"))
+	// VACASK: the sense source spicy puts at the first node of an R, C, L or D written in a directive
+	append(&cands, tcat("vsns_", lower(ref), "_1:flow(br)"))
 	found: ^Vec
-	for c in cands do if v := vec_find(p.ctx.plot, c); v != nil {found = v; break}
+	found_name := ""
+	for c in cands do if v := vec_find(p.ctx.plot, c); v != nil {found, found_name = v, c; break}
+	// ngspice gives a P-channel MOSFET's or JFET's pin currents (@m1[id], @j1[is]) with the
+	// sign of the N-channel one: current out of the pin. Into the pin, as for every other part.
+	if found != nil && strings.has_prefix(found_name, "i(@") && p.ctx.sch != nil && p_channel_part(p.ctx.sch, ref) {
+		val := vec_val(p, found)
+		for &x in val.v do x = -x
+		return val
+	}
 	// ngspice leaves R, C and L currents at zero in AC: compute them from the pin voltages
 	if p.ctx.plot.complex && len(tag) == 0 && (found == nil || vec_all_zero(found)) {
 		if v, ok := passive_ac_current(p, ref); ok do return v
 	}
 	if found != nil do return vec_val(p, found)
 	return fail(p, fmt.tprintf("no current I%s(%s) in this run", tag, ref))
+}
+
+// A part that is a P-channel MOSFET or JFET element (an M or J line with a PMOS, PJF or
+// VDMOS pchan model; not a subcircuit, whose currents come from spicy's sense sources).
+p_channel_part :: proc(s: ^Schematic, ref: string) -> bool {
+	for &c in s.comps {
+		if !strings.equal_fold(c.ref, ref) do continue
+		name := strings.trim_space(c.value)
+		if sp := strings.index_any(name, " \t"); sp >= 0 do name = name[:sp]
+		card := ""
+		// a .model directive of the schematic, else the libraries, else the default card
+		for t in s.texts do if t.directive {
+			for l in split_lines(t.text) {
+				f := strings.fields(replace_parens(l), context.temp_allocator)
+				if len(f) >= 3 && lower(f[0]) == ".model" && strings.equal_fold(f[1], name) do card = l
+			}
+		}
+		if len(card) == 0 {
+			if e := lib_find(name); e != nil {
+				if e.kind == "subckt" do return false
+				card = e.text
+			} else do card = tcat(".model ", name, " ", name)
+		}
+		f := strings.fields(replace_parens(card), context.temp_allocator)
+		if len(f) < 3 do return false
+		switch upper(f[2]) {
+		case "PMOS", "PJF": return true
+		case "VDMOS": return strings.contains(lower(card), "pchan")
+		}
+		return false
+	}
+	return false
 }
 
 @(private = "file")

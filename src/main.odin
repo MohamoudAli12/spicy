@@ -21,7 +21,11 @@ usage:
   spicy --run <file> [--sim <id>] [--csv out.csv]
                                            simulate without the GUI and list (or save) the results
   spicy --import-asc <in.asc> <out.edn>    convert an LTspice schematic
-  spicy --import-model <file>              add a SPICE model file (symbols for its subcircuits)
+  spicy --import-model <file> [--repair | --as-is]
+                                           add a SPICE model file (symbols for its subcircuits); a
+                                           file with faults is only imported with --repair (the copy
+                                           repaired, the file unchanged) or --as-is
+  spicy --check-model <file>               report a model file's faults and what --repair would do
   spicy --embed <file.edn>                 save copies of the models and symbols it uses in it
   spicy --set-program <simulator> <path>   the program a simulator runs (saved in settings.edn)
   spicy --paths                            where settings, symbols, models and logs live
@@ -171,22 +175,58 @@ main :: proc() {
 				fmt.printfln("symbol   %s", edn_str(v, "name"))
 			}
 			return
-		case "--import-model":
-			if len(rest) < 2 {
-				fmt.eprintln("usage: spicy --import-model <file.lib>")
+		case "--import-model", "--check-model":
+			check := rest[0] == "--check-model"
+			repair, as_is := false, false
+			file := ""
+			for a in rest[1:] {
+				switch a {
+				case "--repair": repair = true
+				case "--as-is": as_is = true
+				case:
+					if len(file) > 0 || strings.has_prefix(a, "--") {
+						fmt.eprintln("usage: spicy --import-model <file.lib> [--repair | --as-is]  /  spicy --check-model <file.lib>")
+						os.exit(2)
+					}
+					file = a
+				}
+			}
+			if len(file) == 0 || (repair && as_is) || (check && (repair || as_is)) {
+				fmt.eprintln("usage: spicy --import-model <file.lib> [--repair | --as-is]  /  spicy --check-model <file.lib>")
 				os.exit(2)
 			}
 			load_config()
-			if text, tok := read_text(rest[1], context.temp_allocator); tok && is_circuit_netlist(text) {
-				fmt.eprintfln("%s is a circuit, not a model library: open it (spicy %s) or run it (spicy --run %s)", rest[1], rest[1], rest[1])
+			text, tok := read_text(file, context.temp_allocator)
+			if !tok {
+				fmt.eprintln("cannot read", file)
+				os.exit(3)
+			}
+			if is_circuit_netlist(text) {
+				fmt.eprintfln("%s is a circuit, not a model library: open it (spicy %s) or run it (spicy --run %s)", file, file, file)
 				os.exit(1)
 			}
-			res, ok := import_model_file(rest[1])
+			_, rep := model_repair(text, import_dest(file))
+			if check {
+				if len(rep.fixes) + len(rep.checks) == 0 {
+					fmt.println("no problems found")
+					return
+				}
+				fmt.println(repair_report_text(&rep))
+				os.exit(1)
+			}
+			if len(rep.fixes) > 0 && !repair && !as_is {
+				fmt.println(repair_report_text(&rep))
+				fmt.eprintfln("\n%s has %d fault(s) spicy can repair: import it again with --repair (only the copy is changed) or --as-is", file, len(rep.fixes))
+				os.exit(1)
+			}
+			res, ok := import_model_file(file, repair)
 			if !ok {
 				fmt.eprintln(res.message)
 				os.exit(1)
 			}
 			fmt.println("copied to", res.file)
+			if res.repaired > 0 do fmt.printfln("repaired %d fault(s) in the copy (spicy --check-model %s lists them)", res.repaired, file)
+			if len(rep.checks) > 0 do fmt.printfln("%d thing(s) to check yourself, not changed (spicy --check-model %s lists them)", len(rep.checks), file)
 			for n in res.symbols do fmt.println("symbol  ", n)
 			for n in res.models do fmt.println("model   ", n)
 			return

@@ -230,8 +230,12 @@ meas_values :: proc(res: Eval_Result) -> []f64 {
 
 // Value of y at x (x increasing), by linear interpolation.
 meas_at :: proc(x, y: []f64, at: f64) -> (f64, bool) {
+	// either way: a .dc sweep may go down (.dc V1 0 -5 -0.1); its last point may miss the stop
+	// value by a rounding error (-5.000000000000002)
+	if len(x) < 2 do return 0, false
+	eps := 1e-9 * abs(x[len(x) - 1] - x[0])
 	for i in 0 ..< len(x) - 1 {
-		if x[i] <= at && at <= x[i + 1] {
+		if min(x[i], x[i + 1]) - eps <= at && at <= max(x[i], x[i + 1]) + eps {
 			if x[i + 1] == x[i] do return y[i], true
 			return y[i] + (y[i + 1] - y[i]) * (at - x[i]) / (x[i + 1] - x[i]), true
 		}
@@ -290,7 +294,7 @@ meas_on_plot :: proc(m: ^Meas, p: ^Plot, sch: ^Schematic, sim: ^Simulator_Def) -
 		for i in 0 ..< len(y) {
 			if !in_range(x[i], m) do continue
 			if prev >= 0 {
-				dx := x[i] - x[prev]
+				dx := abs(x[i] - x[prev]) // a .dc sweep may go down
 				sum += (y[i] + y[prev]) / 2 * dx
 				sq += (y[i] * y[i] + y[prev] * y[prev]) / 2 * dx
 				span += dx

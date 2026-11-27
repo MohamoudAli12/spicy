@@ -25,6 +25,7 @@ Action :: struct {
 }
 
 actions: [dynamic]Action
+actions_gen: int // bumped by shortcuts_load
 shortcut_errors: [dynamic]string
 shortcuts_file: string
 
@@ -214,6 +215,7 @@ apply_keys :: proc(m: Edn, src: string, user: bool) {
 }
 
 shortcuts_load :: proc() {
+	actions_gen += 1
 	for &a in actions do delete(a.keys)
 	clear(&actions)
 	clear(&shortcut_errors)

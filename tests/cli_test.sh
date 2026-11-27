@@ -134,6 +134,185 @@ imported="$work/cfg/data/symbols/imported.edn"
 [ -f "$imported" ] || imported="$work/cfg/symbols/imported.edn"
 check "imported symbol"      cat "$imported" ':like "nmos"'
 check "config after import"  "$bin" --check-config "no problems"
+# a MOSFET with more terminals than D G S (a thermal node): a box with all its pins, not the 3-pin symbol
+cat >"$work/fet4.lib" <<'EOF'
+.SUBCKT TFET4 10 20 30 40
+* TERMINALS : D G S TJ
+M1 10 20 30 30 NM4
+R1 40 0 1
+.MODEL NM4 NMOS(LEVEL=1 VTO=1 KP=50u)
+.ENDS
+EOF
+check "import 4-pin MOSFET"  "$bin" --import-model "$work/fet4.lib" "symbol   TFET4"
+check "4-pin MOSFET symbol"  cat "$imported" '{:name "tj"'
+if grep -q '"TFET4" :like' "$imported"; then fail "no 3-pin symbol for 4 ports"; else pass "no 3-pin symbol for 4 ports"; fi
+# vendor pin comments: "Pin order: Drain=10, Gate=50, Source=30" and "TERMINALS D G S" without a colon
+cat >"$work/pinord.lib" <<'EOF'
+**Pin order:  Drain=10, Gate=50, Source=30
+.SUBCKT TFETPO 10 50 30
+M1 10 50 30 30 NMPO
+.MODEL NMPO NMOS(LEVEL=1 VTO=1 KP=50u)
+.ENDS
+.SUBCKT TFETNC 10 20 30
+*     TERMINALS  D  G  S
+M1 10 20 30 30 NMNC
+.MODEL NMNC NMOS(LEVEL=1 VTO=1 KP=50u)
+.ENDS
+EOF
+"$bin" --import-model "$work/pinord.lib" >/dev/null 2>&1
+check "pin order comment"    cat "$imported" '{:name "TFETPO" :like "nmos"'
+check "terminals, no colon"  cat "$imported" '{:name "TFETNC" :like "nmos"'
+# transistor pins: a bare "*  C B E" comment, a Darlington with numbered ports and its model
+# outside it (roles from the circuit), "*PIN_ORDER" over lines of "* 1=E1  6=C1", a dual with
+# no pin comment (each port named by the transistor terminal it meets)
+cat >"$work/bjts.lib" <<'EOF'
+.MODEL QT1 NPN(IS=1e-14 BF=100)
+.MODEL QT2 PNP(IS=1e-14 BF=100)
+.SUBCKT TQBARE 1 2 3
+*              C B E
+Q1 1 2 3 QT1
+.ENDS
+.SUBCKT TQDARL 1 2 3
+Q1 1 2 4 QT1
+Q2 1 4 3 QT1 2
+.ENDS
+*PIN_ORDER
+* 1=E1    6=C1
+* 2=B1    5=B2
+* 3=C2    4=E2
+.SUBCKT TQPO 1 2 3 4 5 6
+Q1 6 2 1 QT1
+Q2 3 5 4 QT2
+.ENDS
+.SUBCKT TQDUAL 1 2 3 4 5 6
+Q1 6 2 1 QT1
+R1 3 7 0.01
+Q2 7 5 4 QT2
+.ENDS
+EOF
+"$bin" --import-model "$work/bjts.lib" >/dev/null 2>&1
+check "bare C B E comment"   cat "$imported" '{:name "TQBARE" :like "npn"'
+check "Darlington roles"     cat "$imported" '{:name "TQDARL" :like "npn"'
+check "PIN_ORDER lines"      grep -A1 '{:name "TQPO"' "$imported" '{:name "e1" :at [-32 32]} {:name "b1" :at [-32 64]} {:name "c2"'
+check "dual from circuit"    grep -A1 '{:name "TQDUAL"' "$imported" '{:name "e1" :at [-32 32]} {:name "b1" :at [-32 64]} {:name "c2"'
+# a faulty vendor library: reported, imported only with --repair or --as-is, the file unchanged
+cat >"$work/faulty.lib" <<'EOF'
+*SRC=QF1;QF1;BJTs NPN; Si; 40V
+.MODEL QF1 NPN (IS=1e-14 BF=100 NE 1.5 TR=1u
++ CJE=1p  +NR=1.1 TR=2n
+; a comment line
++ VAF=50; old value 60
+Inc. BJTs
+.MODEL QF1 NPN (IS=1e-14 BF=100 NE 1.5 TR=1u
++ CJE=1p  +NR=1.1 TR=2n
+; a comment line
++ VAF=50; old value 60
+*SRC=QF2;QF2;BJTs PNP; Si; 40V
+.MODEL QF2 NPN(IS=1e-14 BF=80)
+.MODEL 5401 PNP(IS=1e-14)
+.MODEL DZF D(IS=1n N=1.8 BV=100 CJO=74)
+.ends
+.SUBCKT XF 1 2 3
+Q1 1 2 3 5401
+D1 3 1 DMISSING
+.MODEL QXX NPN(IS=1e-15)
+EOF
+cp "$work/faulty.lib" "$work/faulty.orig"
+check "check-model repairs"  "$bin" --check-model "$work/faulty.lib" 'Repairs spicy can make'
+out=$("$bin" --check-model "$work/faulty.lib" 2>&1)
+for want in 'parameters without "="' '"+" in the middle of a line' 'parameters given twice' 'model cards with an unclosed "("' \
+	'comment lines between a card' '";" comments inside model cards' 'text outside .model and .subckt' 'subcircuits with no .ENDS' \
+	'.ENDS outside a subcircuit' 'model names that are numbers' 'cards given twice, unchanged' 'diodes with BV but no NBV' \
+	'an NPN card; its description says PNP' 'D1 uses DMISSING' 'CJO=74'; do
+	if grep -qF -- "$want" <<<"$out"; then pass "check-model: $want"; else fail "check-model: $want"; fi
+done
+"$bin" --check-model "$work/faulty.lib" >/dev/null 2>&1; [ $? = 1 ] && pass "check-model exit 1 on faults" || fail "check-model exit 1 on faults"
+check "check-model clean"    "$bin" --check-model "$work/fet.lib" "no problems found"
+"$bin" --import-model "$work/faulty.lib" >/dev/null 2>&1; [ $? = 1 ] && pass "import stops on faults" || fail "import stops on faults"
+check "import says how"      "$bin" --import-model "$work/faulty.lib" "import it again with --repair"
+check "import --repair"      "$bin" --import-model "$work/faulty.lib" --repair "repaired"
+models_dir=$(dirname "$(dirname "$imported")")/models
+check "repaired copy header" cat "$models_dir/faulty.lib" "* Repaired by spicy when imported from faulty.lib"
+check "repaired: = added"    cat "$models_dir/faulty.lib" "NE=1.5"
+check "repaired: last TR"    grep -c "TR=1u" "$models_dir/faulty.lib" "0"
+check "repaired: renamed"    cat "$models_dir/faulty.lib" "Q1 1 2 3 M5401"
+check "repaired: NBV"        cat "$models_dir/faulty.lib" "NBV=1"
+check "repaired: .ENDS"      grep -A1 "^D1 3 1 DMISSING" "$models_dir/faulty.lib" ".ENDS"
+if cmp -s "$work/faulty.lib" "$work/faulty.orig"; then pass "original unchanged"; else fail "original unchanged"; fi
+check "import --as-is"       "$bin" --import-model "$work/faulty.lib" --as-is "copied to"
+check "as-is copy unchanged" cat "$models_dir/faulty.lib" "NE 1.5"
+"$bin" --import-model "$work/faulty.lib" --repair --as-is >/dev/null 2>&1; [ $? = 2 ] && pass "repair and as-is: usage" || fail "repair and as-is: usage"
+# a card with blank and comment lines between its "+" lines is read whole
+printf '%s\n' '.MODEL QBL NPN' '+ IS=1e-14' '' '* note' '+ BF=321' >"$work/blank.lib"
+"$bin" --import-model "$work/blank.lib" --as-is >/dev/null 2>&1
+printf '%s\n' '{:spicy-schematic 1 :components [{:symbol "npn" :ref "Q1" :value "QBL" :at [0 0]}]' \
+	' :texts [{:at [0 200] :text ".op" :directive true}]}' >"$work/qbl.edn"
+check "card read past blank lines" "$bin" --netlist "$work/qbl.edn" "BF=321"
+# a diode parameter VACASK's diode does not have (ngspice's IBVL, a vendor's typo): left out
+printf '%s\n' '.MODEL DPX D(IS=1n N=1.02 BV=63 IBV=0.2m IBVL=1u NBVL=3 VCJO=3p TRS1=4m)' >"$work/dpx.lib"
+"$bin" --import-model "$work/dpx.lib" --as-is >/dev/null 2>&1
+printf '%s\n' '{:spicy-schematic 1 :components [{:symbol "diode" :ref "D1" :value "DPX" :at [0 0]}]' \
+	' :flags [{:name "a" :at [16 0]} {:name "0" :at [16 64]}]' \
+	' :texts [{:at [0 200] :text ".op" :directive true}]}' >"$work/dpx.edn"
+check "vacask: diode params left out" "$bin" --netlist "$work/dpx.edn" --sim vacask "DPX: ibvl, nbvl, vcjo left out"
+check "vacask: alias kept"   "$bin" --netlist "$work/dpx.edn" --sim vacask "trs1=0.004"
+# diode libraries (Diodes Inc's Zener, TVS and switching tables): a label line that reads as an
+# element still leaves a library; ".SUBCKET", "µ", a non-breaking space, ").ENDS", a model after
+# its .ENDS under a shared name, a copy's name, a misspelt model name
+printf '%s\n' '*SRC=DZA;DI_DZA;Diodes;Zener; 5.10V  0.300W' \
+	".SUBCKT DI_DZA $(printf '\xc2\xa0')1 2" '*  Terminals A C' 'D1 1 2 DF' 'DZ 3 1 DR' 'VZ 2 3 4.2' \
+	'.MODEL DF D ( IS=4n RS=30 N=1.1 CJO=20p )' '.MODEL DR D ( IS=1f RS=60 N=3 ).ENDS' \
+	'*SRC=DZAT;DI_DZAT;Diodes;Zener; 5.10V  0.300W' '.SUBCKT DI_DZA 1 2' 'D1 1 2 DF' 'DZ 3 1 DR' 'VZ 2 3 4.3' \
+	'.MODEL DF D ( IS=4n RS=30 N=1.1 CJO=20p )' '.MODEL DR D ( IS=1f RS=60 N=3 )' '.ENDS' \
+	'.SUBCKT TVA 1 2' 'D1 1 2 ZDiode' '.ENDS TVA' '.MODEL ZDiode d IS=1e-13 BV=31 IBV=1m' \
+	'.SUBCKT TVB 1 2' 'D1 1 2 ZDiode' '.ENDS TVB' '.MODEL ZDiode d IS=1e-13 BV=25 IBV=1m' \
+	'.SUBCKET TVC 1 2' 'D1 1 2 TVCX' 'R1 1 2 1G' '' '.model TVCQ D(IS=1p BV=29 IBV=5m)' '' \
+	'Switching Diode - one element of device' '.MODEL DSW D ( IS=1n BV=250 IBV=100µ N=1 )' \
+	'.SUBCKT DLK 7 1' 'L1 7 2 2n' 'D1 2 1 DSW' 'RL 1 2 5MEG' '.ENDS' >"$work/zen.lib"
+out=$("$bin" --check-model "$work/zen.lib" 2>&1)
+for want in '".SUBCKET" made ".SUBCKT"' 'non-ASCII characters' '.ENDS on the same line as a card' \
+	"models after their subcircuit's .ENDS" 'DI_DZA             now DI_DZAT' 'D1: TVCX made TVCQ'; do
+	if grep -qF -- "$want" <<<"$out"; then pass "zen.lib: $want"; else fail "zen.lib: $want"; sed 's/^/     /' <<<"$out" | head -40; fi
+done
+check "zen.lib: a library, not a circuit" "$bin" --import-model "$work/zen.lib" --repair "repaired"
+zen="$models_dir/zen.lib"
+check "repaired: µ"          cat "$zen" "IBV=100u"
+check "repaired: own line"   grep -c "^\.ENDS$" "$zen" "4"
+check "repaired: ZDiode in"  grep -B1 "^\.ENDS TVA" "$zen" "BV=31"
+check "repaired: own model"  cat "$zen" "D1 1 2 TVCQ"
+symf="$imported"
+check "zener: A C pins"      grep -A1 '{:name "DI_DZA"' "$symf" ':like "diode"'
+check "TVS: pins from circuit" grep '{:name "DLK"' "$symf" ':like "diode"'
+# an imported model takes the place of the built-in one of the same name
+printf '%s\n' '.model 2N3904 NPN(IS=1e-14 BF=123)' >"$work/my3904.lib"
+"$bin" --import-model "$work/my3904.lib" >/dev/null 2>&1
+printf '%s\n' '{:spicy-schematic 1 :components [{:symbol "npn" :ref "Q1" :value "2N3904" :at [0 0]}]' \
+	' :texts [{:at [0 200] :text ".op" :directive true}]}' >"$work/q3904.edn"
+check "imported beats built-in" "$bin" --netlist "$work/q3904.edn" "BF=123"
+# VACASK: SPICE element lines in a directive, a resistor model (TC1/TC2) and a PSpice VSWITCH
+# (VON < VOFF: on at low voltages) in a subcircuit, PSpice-only parameters left out
+cat >"$work/vsub.lib" <<'EOF'
+.SUBCKT VSUBX A B C
+  RA A B RM 10
+  S1 B C C 0 SMX
+  D1 C 0 DX
+.MODEL RM RES (TC1=1e-3 TC2=1E-6)
+.MODEL SMX VSWITCH RON=.001 ROFF=100 VON=-0.5 VOFF=0.5
+.MODEL DX D(IS=1n T_ABS=25 TIKF=1e-3)
+.ENDS
+EOF
+"$bin" --import-model "$work/vsub.lib" >/dev/null 2>&1
+printf '%s\n' '{:spicy-schematic 1 :components []' \
+	' :texts [{:at [0 200] :text "V1 a 0 PULSE(0 1 0 1n 1n 1u 2u)\nX1 a b c VSUBX\n.tran 10n 4u" :directive true}]}' >"$work/vsub.edn"
+check "vacask directive source" "$bin" --netlist "$work/vsub.edn" --sim vacask 'v1 (a 0) vsource type="pulse"'
+check "vacask directive subckt" "$bin" --netlist "$work/vsub.edn" --sim vacask "x1 (a b c) vsubx"
+check "vacask RES model"     "$bin" --netlist "$work/vsub.edn" --sim vacask "model rm sp_resistor tc1=0.001"
+check "vacask resistor with model" "$bin" --netlist "$work/vsub.edn" --sim vacask "ra (a b) rm r=10"
+check "vacask VSWITCH"       "$bin" --netlist "$work/vsub.edn" --sim vacask "model smx spicy_vsw ron=0.001 roff=100 vt=0 vh=0.5 sense=-1"
+check "vacask S element"     "$bin" --netlist "$work/vsub.edn" --sim vacask "s1 (b c c 0) smx"
+if "$bin" --netlist "$work/vsub.edn" --sim vacask 2>&1 | grep -qi "t_abs\|tikf"; then fail "vacask PSpice-only parameters left out"; else pass "vacask PSpice-only parameters left out"; fi
+# Xyce: library cards without their indent (Xyce misreads an indented subcircuit line)
+if "$bin" --netlist "$work/vsub.edn" --sim xyce 2>&1 | grep -q "^RA A B RM 10"; then pass "cards without indent"; else fail "cards without indent"; fi
 # an op-amp model: a triangle, and its building blocks (called only inside it) get no symbol
 cat > "$work/amp.lib" <<'EOF'
 .subckt AMPX IN+ IN- VCC VEE OUT
@@ -184,6 +363,13 @@ if command -v ngspice >/dev/null 2>&1; then
 	check "ngspice subckt"     "$bin" --text --run "$work/fet.edn" "v(dd)                        2 V"
 	check "ngspice subckt I"   "$bin" --text --run "$work/fet.edn" "i(vsns_m1_d)"
 	check "ngspice .model"     "$bin" --text --run "$work/fet.edn" "v(a)"
+	# .meas on a .dc sweep that goes down, of a source written in the directive; a PMOS's
+	# drain current is the current into the drain (ngspice's own @m1[id] has the other sign)
+	printf '%s\n' '{:spicy-schematic 1 :components [{:symbol "pmos" :ref "M1" :value "PMT" :at [0 0]}]' \
+		' :flags [{:name "d" :at [48 96]} {:name "g" :at [0 16]} {:name "0" :at [48 0]}]' \
+		' :texts [{:at [0 300] :text "Vd d 0 -1\nVg g 0 0\n.model PMT PMOS(LEVEL=1 VTO=-1 KP=1m)\n.dc Vg 0 -5 -0.1\n.meas dc idm FIND Id(M1) AT=-5\n.meas dc ivd FIND I(Vd) AT=-5" :directive true}]}' >"$work/pdc.edn"
+	check "meas dc, sweep down" "$bin" --text --run "$work/pdc.edn" "measure ivd = 3.5 mA at -5 V"
+	check "pmos Id into drain" "$bin" --text --run "$work/pdc.edn" "measure idm = -3.5 mA"
 	# a failed run must not show the raw file of another schematic in the same folder
 	sed 's/:value "1k" :at \[400 0\]/:value "1k bad=(" :at [400 0]/' "$work/fet.edn" >"$work/bad.edn"
 	check "failed run, no stale" "$bin" --text --run "$work/bad.edn" "without results"

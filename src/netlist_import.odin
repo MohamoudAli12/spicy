@@ -20,6 +20,15 @@ is_netlist_ext :: proc(path: string) -> bool {
 // A circuit (element lines outside .subckt blocks), not just a model library.
 is_circuit_netlist :: proc(text: string) -> bool {
 	lines := logical_lines(text)
+	// a file with models or subcircuits and no analysis is a library, even when a vendor's label
+	// line ("SDM2U30CSP Spice Model v1.0 …") or a misspelt ".SUBCKET" looks like an element
+	defines, analysis := false, false
+	for l in lines {
+		low := lower(l)
+		if strings.has_prefix(low, ".model") || strings.has_prefix(low, ".subckt") do defines = true
+		for a in ([]string{".tran", ".ac ", ".dc ", ".op", ".noise", ".tf ", ".four", ".pz", ".sens", ".disto"}) do if strings.has_prefix(low, a) do analysis = true
+	}
+	if defines && !analysis do return false
 	depth := 0
 	for l, i in lines {
 		if i == 0 && l[0] == '*' do continue // the title
@@ -27,8 +36,8 @@ is_circuit_netlist :: proc(text: string) -> bool {
 		if strings.has_prefix(low, ".subckt") do depth += 1
 		if strings.has_prefix(low, ".ends") do depth = max(0, depth - 1)
 		if depth > 0 || l[0] == '*' || l[0] == '.' || l[0] == '+' do continue
-		c := l[0] | 0x20
-		if c >= 'a' && c <= 'z' do return true
+		// an element ("R1 a b 1k"), not a vendor's label line ("Inc. BJTs", "Transistor")
+		if element_like(l) do return true
 	}
 	return false
 }

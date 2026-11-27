@@ -52,36 +52,313 @@ subckt_info :: proc(e: ^Lib_Entry, lines: []string, i: int) {
 		append(&ports, strings.clone(t))
 	}
 	e.ports = ports[:]
-	// terminal names from a comment: "* TERMINALS : D G S", "* pins: anode cathode" …
-	from := max(0, i - 6)
+	// terminal names from a comment: "* TERMINALS : D G S", "* pins: anode cathode",
+	// "*Pin order: Drain=10, Gate=50", "*PIN_ORDER" over lines of "* 1=E1  6=C1", "*PINS C B E",
+	// or a bare "*  C B E" of terminal names
+	from := max(0, i - 12)
 	body := split_lines(e.text)
 	comments := make([dynamic]string, context.temp_allocator)
 	append(&comments, ..lines[from:i])
 	append(&comments, ..body)
 	e.pins = e.ports
-	for l in comments {
+	is_comment :: proc(l: string) -> bool {
 		t := strings.trim_space(l)
-		if len(t) < 2 || (t[0] != '*' && t[0] != ';') do continue
-		low := lower(t)
-		if !strings.contains(low, "terminal") && !strings.contains(low, "pin") && !strings.contains(low, "node") do continue
-		c := strings.index_byte(t, ':')
-		if c < 0 do continue
-		r, _ := strings.replace_all(t[c + 1:], ",", " ", context.temp_allocator)
-		toks := strings.fields(r, context.temp_allocator)
-		if len(toks) == len(ports) {
-			names := make([]string, len(toks))
-			for x, j in toks do names[j] = strings.clone(x)
-			e.pins = names
-			break
+		return len(t) >= 2 && (t[0] == '*' || t[0] == ';')
+	}
+	tokens_of :: proc(s: string) -> []string {
+		r, _ := strings.replace_all(s, ",", " ", context.temp_allocator)
+		out := make([dynamic]string, context.temp_allocator)
+		for x in strings.fields(r, context.temp_allocator) {
+			y := strings.trim_right(x, ".;")
+			if len(y) > 0 do append(&out, y)
+		}
+		return out[:]
+	}
+	all_pairs :: proc(toks: []string) -> bool {
+		if len(toks) == 0 do return false
+		for x in toks do if eq := strings.index_byte(x, '='); eq <= 0 || eq == len(x) - 1 do return false
+		return true
+	}
+	ROLES :: []string{"d", "g", "s", "c", "b", "e", "a", "k", "bulk"}
+	pins_loop: for l, li in comments {
+		if !is_comment(l) do continue
+		w := strings.trim_left(strings.trim_space(l), "*; \t")
+		low := lower(w)
+		rest := ""
+		keyed := false
+		for kw in ([]string{"pin_order", "pin order", "pins", "pin", "terminals", "terminal", "nodes", "node"}) {
+			if k := strings.index(low, kw); k >= 0 {
+				rest = strings.trim_left(w[k + len(kw):], " \t:-")
+				keyed = true
+				break
+			}
+		}
+		toks := make([dynamic]string, context.temp_allocator)
+		append(&toks, ..tokens_of(rest if keyed else w))
+		if keyed && (len(toks) == 0 || all_pairs(toks[:])) {
+			// the pairs may go on over the next comment lines
+			for m := li + 1; m < len(comments) && is_comment(comments[m]); m += 1 {
+				more := tokens_of(strings.trim_left(strings.trim_space(comments[m]), "*; \t"))
+				if !all_pairs(more) do break
+				append(&toks, ..more)
+			}
+		}
+		// "Drain=10" or "1=E1": one side is a port, the other its name
+		if all_pairs(toks[:]) && len(toks) == len(ports) {
+			names := make([]string, len(ports))
+			ok := true
+			for x in toks {
+				eq := strings.index_byte(x, '=')
+				a, b := x[:eq], x[eq + 1:]
+				k, nm := -1, ""
+				for p, j in ports {
+					if strings.equal_fold(p, b) {k, nm = j, a}
+					else if strings.equal_fold(p, a) {k, nm = j, b}
+				}
+				if k < 0 || len(names[k]) > 0 {ok = false; break}
+				names[k] = strings.clone(nm)
+			}
+			if ok {
+				e.pins = names
+				break pins_loop
+			}
+			for n in names do delete(n)
+			delete(names)
+			continue
+		}
+		if len(toks) != len(ports) || len(toks) == 0 do continue
+		if !keyed {
+			// a bare comment: only terminal names ("*              C B E")
+			for x in toks {
+				known := false
+				for r in ROLES do if pin_role(strings.trim_right(x, "0123456789")) == r do known = true
+				if !known do continue pins_loop
+			}
+		}
+		names := make([]string, len(toks))
+		for x, j in toks do names[j] = strings.clone(x)
+		e.pins = names
+		break
+	}
+	subckt_finish(e, nil)
+}
+
+// Whether a symbol is the plain box an earlier import made, never edited: the box this import
+// would make with the same pin names is the same. Such a box gives way to a better symbol
+// (pins spicy can now name: a diode, a transistor).
+@(private = "file")
+untouched_box :: proc(e: ^Lib_Entry, old: ^Symbol, name, stem: string) -> bool {
+	if len(old.like) > 0 || len(old.pins) != len(e.ports) do return false
+	tmp := e^
+	pins := make([]string, len(old.pins), context.temp_allocator)
+	for p, k in old.pins do pins[k] = p.name
+	tmp.pins = pins
+	box := auto_symbol(&tmp, name, stem)
+	if strings.contains(box, ":like") do return false
+	v, err := edn_parse(box)
+	if len(err) > 0 do return false
+	same := lower(edn_to_string(v, context.temp_allocator)) == lower(old.edn) // pin labels keep their case
+	if !same do return false
+	// and a better one is now made
+	return strings.contains(auto_symbol(e, name, stem), ":like")
+}
+
+// The subcircuit's device, and for a transistor with numbered ports their names from its
+// circuit. file_models: the types of the .model cards of the same file (a subcircuit may use
+// one defined outside it); nil for none.
+subckt_finish :: proc(e: ^Lib_Entry, file_models: map[string]string) {
+	if len(e.dev) == 0 {
+		delete(e.dev)
+		e.dev = strings.clone(subckt_device(e.text, file_models))
+	}
+	if (e.dev == "NPN" || e.dev == "PNP") && raw_equal(e.pins, e.ports) {
+		if len(e.ports) == 3 {
+			if r := bjt_port_roles(e); r != nil {e.pins = r; return}
+		}
+		if r := bjt_port_names(e); r != nil do e.pins = r
+	}
+	if e.dev == "D" && len(e.ports) == 2 && raw_equal(e.pins, e.ports) {
+		if r := diode_port_roles(e); r != nil do e.pins = r
+	}
+	// "PIN_ORDER C A" on a diode: C is the cathode, not a collector
+	if e.dev == "D" && len(e.pins) == 2 {
+		r0, r1 := pin_role(e.pins[0]), pin_role(e.pins[1])
+		if (r0 == "c" && r1 == "a") || (r0 == "a" && r1 == "c") {
+			out := make([]string, 2)
+			for p, k in e.pins do out[k] = strings.clone("K" if pin_role(p) == "c" else p)
+			e.pins = out
 		}
 	}
-	e.dev = strings.clone(subckt_device(e.text))
+}
+
+// A and K for a two-port diode subcircuit with numbered ports: from the first diode that sits
+// across the two ports (directly or through a series R or L). nil when none does (a
+// bidirectional TVS: two diodes back to back).
+@(private = "file")
+diode_port_roles :: proc(e: ^Lib_Entry) -> []string {
+	lines := logical_lines(e.text)
+	parent := make(map[string]string, 16, context.temp_allocator)
+	find :: proc(parent: ^map[string]string, x: string) -> string {
+		r := x
+		for {
+			p, ok := parent[r]
+			if !ok || p == r do return r
+			r = p
+		}
+	}
+	for joined in ([]bool{false, true}) {
+		clear(&parent)
+		if joined {
+			// series leads (L) first, then resistors; never one that would join the two ports
+			for kind in ([]u8{'l', 'r'}) do for l, n in lines {
+				if n == 0 || len(l) == 0 || l[0] | 0x20 != kind do continue
+				f := strings.fields(l, context.temp_allocator)
+				if len(f) < 3 do continue
+				a, b := find(&parent, lower(f[1])), find(&parent, lower(f[2]))
+				q0, q1 := find(&parent, lower(e.ports[0])), find(&parent, lower(e.ports[1]))
+				if (a == q0 && b == q1) || (a == q1 && b == q0) do continue
+				if a != b do parent[a] = b
+			}
+		}
+		p0, p1 := find(&parent, lower(e.ports[0])), find(&parent, lower(e.ports[1]))
+		if p0 == p1 do continue
+		for l, n in lines {
+			if n == 0 || len(l) == 0 || (l[0] != 'D' && l[0] != 'd') do continue
+			f := strings.fields(l, context.temp_allocator)
+			if len(f) < 3 do continue
+			a, k := find(&parent, lower(f[1])), find(&parent, lower(f[2]))
+			out := make([]string, 2)
+			if a == p0 && k == p1 {out[0], out[1] = strings.clone("A"), strings.clone("K"); return out}
+			if a == p1 && k == p0 {out[0], out[1] = strings.clone("K"), strings.clone("A"); return out}
+			delete(out)
+		}
+	}
+	return nil
+}
+
+@(private = "file")
+raw_equal :: proc(a, b: []string) -> bool {return len(a) == len(b) && (len(a) == 0 || raw_data(a) == raw_data(b))}
+
+// The terminal names of a transistor subcircuit's three ports, from the transistor terminals
+// each one reaches (directly or through a resistor or inductor in series): in a Darlington
+// the collector port meets only collectors, the base port the first base, the emitter port
+// an emitter. nil when that does not give one of C, B, E to each port.
+@(private = "file")
+bjt_port_roles :: proc(e: ^Lib_Entry) -> []string {
+	lines := logical_lines(e.text)
+	// nets joined through R and L elements
+	parent := make(map[string]string, 16, context.temp_allocator)
+	find :: proc(parent: ^map[string]string, x: string) -> string {
+		r := x
+		for {
+			p, ok := parent[r]
+			if !ok || p == r do return r
+			r = p
+		}
+	}
+	for joined in ([]bool{false, true}) {
+		clear(&parent)
+		if joined {
+			for l, n in lines {
+				if n == 0 || len(l) == 0 do continue
+				if l[0] != 'R' && l[0] != 'r' && l[0] != 'L' && l[0] != 'l' do continue
+				f := strings.fields(l, context.temp_allocator)
+				if len(f) < 3 do continue
+				a, b := find(&parent, lower(f[1])), find(&parent, lower(f[2]))
+				if a != b do parent[a] = b
+			}
+		}
+		seen := make([]u8, 3, context.temp_allocator) // bit 1 c, 2 b, 4 e
+		for l, n in lines {
+			if n == 0 || len(l) == 0 || (l[0] != 'Q' && l[0] != 'q') do continue
+			f := strings.fields(l, context.temp_allocator)
+			if len(f) < 4 do continue
+			for t, k in ([]u8{1, 2, 4}) {
+				net := find(&parent, lower(f[1 + k]))
+				for p, j in e.ports do if find(&parent, lower(p)) == net do seen[j] |= t
+			}
+		}
+		names := [3]string{}
+		used: u8 = 0
+		ok := true
+		for x, j in seen {
+			switch x {
+			case 1: names[j] = "C"
+			case 2: names[j] = "B"
+			case 4: names[j] = "E"
+			case: ok = false
+			}
+			if !ok do break
+			if used & x != 0 {ok = false; break}
+			used |= x
+		}
+		if ok && used == 7 {
+			out := make([]string, 3)
+			for nm, j in names do out[j] = strings.clone(nm)
+			return out
+		}
+	}
+	return nil
+}
+
+// Port names of a subcircuit of several transistors (a dual BJT, "1 2 3 4 5 6"): each port
+// meets one terminal of one transistor (directly or through a series R or L), named by the
+// terminal and the transistor's number in the subcircuit: E1 B1 C2 …
+@(private = "file")
+bjt_port_names :: proc(e: ^Lib_Entry) -> []string {
+	lines := logical_lines(e.text)
+	parent := make(map[string]string, 16, context.temp_allocator)
+	find :: proc(parent: ^map[string]string, x: string) -> string {
+		r := x
+		for {
+			p, ok := parent[r]
+			if !ok || p == r do return r
+			r = p
+		}
+	}
+	for joined in ([]bool{false, true}) {
+		clear(&parent)
+		if joined {
+			for l, n in lines {
+				if n == 0 || len(l) == 0 do continue
+				if l[0] != 'R' && l[0] != 'r' && l[0] != 'L' && l[0] != 'l' do continue
+				f := strings.fields(l, context.temp_allocator)
+				if len(f) < 3 do continue
+				a, b := find(&parent, lower(f[1])), find(&parent, lower(f[2]))
+				if a != b do parent[a] = b
+			}
+		}
+		names := make([]string, len(e.ports), context.temp_allocator)
+		hits := make([]int, len(e.ports), context.temp_allocator)
+		q := 0
+		for l, n in lines {
+			if n == 0 || len(l) == 0 || (l[0] != 'Q' && l[0] != 'q') do continue
+			f := strings.fields(l, context.temp_allocator)
+			if len(f) < 4 do continue
+			q += 1
+			for t, k in ([]string{"C", "B", "E"}) {
+				net := find(&parent, lower(f[1 + k]))
+				for p, j in e.ports do if find(&parent, lower(p)) == net {
+					hits[j] += 1
+					names[j] = fmt.tprintf("%s%d", t, q)
+				}
+			}
+		}
+		ok := q > 1
+		for h in hits do if h != 1 do ok = false
+		if ok {
+			out := make([]string, len(names))
+			for nm, j in names do out[j] = strings.clone(nm)
+			return out
+		}
+	}
+	return nil
 }
 
 // The main device of a subcircuit (NMOS, PMOS, NPN, PNP, NJF, PJF, D) from its first
 // transistor and the model that transistor uses; "" when there is none.
 @(private = "file")
-subckt_device :: proc(text: string) -> string {
+subckt_device :: proc(text: string, file_models: map[string]string) -> string {
 	types := make(map[string]string, 8, context.temp_allocator)
 	lines := logical_lines(text)
 	for l in lines {
@@ -101,6 +378,7 @@ subckt_device :: proc(text: string) -> string {
 			f := strings.fields(replace_parens(l), context.temp_allocator)
 			for x in f[1:] {
 				if t, ok := types[lower(x)]; ok do return t
+				if t, ok := file_models[lower(x)]; ok do return t
 				if e := lib_find(x); e != nil && e.kind != "subckt" do return e.kind
 			}
 		case 'D', 'd':
@@ -113,13 +391,15 @@ subckt_device :: proc(text: string) -> string {
 // The lines of a SPICE text with "+" continuation lines joined and blank lines dropped.
 logical_lines :: proc(text: string) -> []string {
 	out := make([dynamic]string, context.temp_allocator)
+	last := -1 // the line a "+" line continues: comment lines may come between
 	for raw in split_lines(text) {
 		t := strings.trim_space(raw)
 		if len(t) == 0 do continue
-		if t[0] == '+' && len(out) > 0 {
-			out[len(out) - 1] = tcat(out[len(out) - 1], " ", strings.trim_space(t[1:]))
+		if t[0] == '+' && last >= 0 {
+			out[last] = tcat(out[last], " ", strings.trim_space(t[1:]))
 			continue
 		}
+		if t[0] != '*' do last = len(out)
 		append(&out, t)
 	}
 	return out[:]
@@ -135,7 +415,7 @@ pin_role :: proc(s: string) -> string {
 	case "bulk", "body", "sub", "substrate": return "bulk"
 	case "collector", "col": return "c"
 	case "base": return "b"
-	case "emitter", "emit": return "e"
+	case "emitter", "emit", "emtr": return "e"
 	case "anode", "+": return "a"
 	case "cathode", "-": return "k"
 	}
@@ -421,6 +701,41 @@ vacask_subckt :: proc(nl: ^Netlist, o: ^Vacask_Out, e: ^Lib_Entry) {
 @(private = "file")
 vnode_name :: proc(n: string) -> string {return n if n == "0" else sanitize(lower(n))}
 
+// A SPICE element line written in a directive ("V1 in 0 PULSE(0 1 0 1n)"), as opposed to a
+// line of VACASK's own syntax ("r1 (a b) res r=1k", "model …", "analysis …").
+spice_element_line :: proc(t: string) -> bool {
+	f := strings.fields(t, context.temp_allocator)
+	if len(f) < 3 || f[1][0] == '(' do return false
+	switch lower(f[0]) {
+	case "load", "model", "parameters", "subckt", "ends", "include", "embed", "control", "endc",
+	     "options", "analysis", "sweep", "save", "print", "global", "ground", "postprocess", "var", "abort":
+		return false
+	}
+	return strings.index_byte("rclviegfhdmqjxsRCLVIEGFHDMQJXS", f[0][0]) >= 0
+}
+
+// A SPICE element line of a directive in VACASK form; defined: the models the directives define.
+vacask_directive_element :: proc(nl: ^Netlist, o: ^Vacask_Out, line: string, defined: map[string]bool) -> (string, string) {
+	// an R, C, L or D: a 0 V sense source at its first node, so that I(R1) can be measured
+	// (VACASK gives no current of these devices)
+	t := strings.trim_space(line)
+	if len(t) > 0 && strings.index_byte("rcldRCLD", t[0]) >= 0 {
+		f := strings.fields(t, context.temp_allocator)
+		if len(f) >= 3 && f[1][0] != '(' {
+			ref := lower(f[0])
+			inner := tcat(ref, "_1")
+			// the first node replaced in place (the rest of the line as written)
+			k := strings.index(t, f[0]) + len(f[0])
+			k += strings.index(t[k:], f[1])
+			el, err := vacask_element(nl, o, tcat(t[:k], inner, t[k + len(f[1]):]), defined)
+			if len(err) > 0 do return el, err
+			add_unique_s(o.models, "model vsource vsource")
+			return fmt.tprintf("vsns_%s (%s %s) vsource dc=0\n%s", inner, vnode_name(f[1]), vnode_name(inner), el), ""
+		}
+	}
+	return vacask_element(nl, o, line, defined)
+}
+
 // One SPICE element line in VACASK form.
 @(private = "file")
 vacask_element :: proc(nl: ^Netlist, o: ^Vacask_Out, line: string, local_models: map[string]bool) -> (string, string) {
@@ -471,6 +786,11 @@ vacask_element :: proc(nl: ^Netlist, o: ^Vacask_Out, line: string, local_models:
 		if kind == 'c' do dev, par, osdi = "spicy_c", "c", "spice/capacitor.osdi"
 		if kind == 'l' do dev, par, osdi = "spicy_l", "l", "spice/inductor.osdi"
 		add_unique_s(o.loads, osdi)
+		// "RD 10 1 Rmod1 1.02": a resistor with a .model RES (TC1, TC2): that model, then the value
+		if kind == 'r' && len(plain) > 3 && is_model(plain[2], local_models) {
+			need_model(nl, o, plain[2], local_models)
+			return tcat(fmt.tprintf("%s (%s) %s r=%s", name, nodes(plain[:2]), vacask_name(plain[2]), vacask_value(plain[3])), extra), ""
+		}
 		add_unique_s(o.models, fmt.tprintf("model %s sp_%s", dev, osdi[6:len(osdi) - 5]))
 		s := fmt.tprintf("%s (%s) %s", name, nodes(plain[:2]), dev)
 		if len(val) > 0 do s = fmt.tprintf("%s %s=%s", s, par, vacask_value(val))
@@ -509,6 +829,12 @@ vacask_element :: proc(nl: ^Netlist, o: ^Vacask_Out, line: string, local_models:
 		src, err := vacask_source(strings.trim_space(rest))
 		if len(err) > 0 do return "", fmt.tprintf("\"%s\": %s", line, err)
 		return fmt.tprintf("%s (%s) %s %s", name, nodes(plain[:2]), dev, src), ""
+	case 's':
+		// S<name> n+ n- nc+ nc- <SW or VSWITCH model>
+		if len(plain) < 5 do return "", fmt.tprintf("\"%s\": 4 nodes and a switch model needed", line)
+		if !is_model(plain[4], local_models) do return "", fmt.tprintf("\"%s\": no known model", line)
+		need_model(nl, o, plain[4], local_models)
+		return fmt.tprintf("%s (%s) %s", name, nodes(plain[:4]), vacask_name(plain[4])), ""
 	case 'x':
 		if len(plain) < 2 do return "", fmt.tprintf("\"%s\": nodes and a subcircuit needed", line)
 		sub := plain[len(plain) - 1]
@@ -526,19 +852,35 @@ vacask_element :: proc(nl: ^Netlist, o: ^Vacask_Out, line: string, local_models:
 Import_Result :: struct {
 	file:    string, // where the library was copied to
 	symbols: [dynamic]string, // names of the symbols made
-	models:  [dynamic]string, // .model names
-	message: string,
+	models:   [dynamic]string, // .model names
+	message:  string,
+	repaired: int, // repairs made to the copy (model_repair)
 }
 
 // Copies a SPICE model file into the models folder and makes a symbol for every
 // subcircuit in it. The symbols go into symbols/imported.edn.
-import_model_file :: proc(src: string) -> (res: Import_Result, ok: bool) {
+// repair: the copy gets model_repair's repairs (the file itself is not changed).
+// Where an import puts its copy: models/<name>.lib ("DMT10H003SPSWQ.spice.txt" → DMT10H003SPSWQ.lib).
+import_dest :: proc(src: string) -> string {
+	stem := base_name(src)
+	if dot := strings.index_byte(stem, '.'); dot > 0 do stem = stem[:dot]
+	return path_join(user_models_dir(), tcat(stem, ".lib"))
+}
+
+import_model_file :: proc(src: string, repair := false) -> (res: Import_Result, ok: bool) {
 	res.symbols = make([dynamic]string, context.temp_allocator)
 	res.models = make([dynamic]string, context.temp_allocator)
 	text, rok := read_text(src, context.temp_allocator)
 	if !rok {
 		res.message = tcat("cannot read ", src)
 		return res, false
+	}
+	if repair {
+		fixed, rep := model_repair(text, import_dest(src))
+		if len(rep.fixes) > 0 {
+			text = tcat(repair_header(&rep, src), fixed)
+			res.repaired = len(rep.fixes)
+		}
 	}
 	entries := make([dynamic]Lib_Entry, context.temp_allocator)
 	{
@@ -549,12 +891,9 @@ import_model_file :: proc(src: string) -> (res: Import_Result, ok: bool) {
 		res.message = tcat(base_name(src), " has no .model or .subckt")
 		return res, false
 	}
-	// models/<name>.lib ("DMT10H003SPSWQ.spice.txt" → DMT10H003SPSWQ.lib)
-	dir := user_models_dir()
-	os.make_directory_all(dir)
-	stem := base_name(src)
-	if dot := strings.index_byte(stem, '.'); dot > 0 do stem = stem[:dot]
-	dst := path_join(dir, tcat(stem, ".lib"))
+	os.make_directory_all(user_models_dir())
+	dst := import_dest(src)
+	stem := strings.trim_suffix(base_name(dst), ".lib")
 	if !write_text(dst, text) {
 		res.message = tcat("cannot write ", dst)
 		return res, false
@@ -581,7 +920,7 @@ import_model_file :: proc(src: string) -> (res: Import_Result, ok: bool) {
 		// still fit the subcircuit's ports
 		if old := symbol_find(name); old != nil && strings.has_suffix(old.source, "imported.edn") {
 			c := Comp{value = name}
-			if _, err := subckt_pin_map(&e, old, &c); len(err) == 0 do continue
+			if _, err := subckt_pin_map(&e, old, &c); len(err) == 0 && !untouched_box(&e, old, name, stem) do continue
 		}
 		append(&sym_texts, auto_symbol(&e, name, stem))
 		append(&made, name)
@@ -708,13 +1047,13 @@ auto_symbol :: proc(e: ^Lib_Entry, name, file: string) -> string {
 	like, what := "", ""
 	switch e.dev {
 	case "NMOS", "PMOS":
-		if has(roles[:], "d", "g", "s") do like = lower(e.dev)
+		if len(e.ports) == 3 && has(roles[:], "d", "g", "s") do like = lower(e.dev)
 		what = "N-channel MOSFET" if e.dev == "NMOS" else "P-channel MOSFET"
 	case "NPN", "PNP":
-		if has(roles[:], "c", "b", "e") do like = lower(e.dev)
+		if len(e.ports) == 3 && has(roles[:], "c", "b", "e") do like = lower(e.dev)
 		what = tcat(e.dev, " transistor")
 	case "NJF", "PJF":
-		if has(roles[:], "d", "g", "s") && symbol_find(lower(e.dev)) != nil do like = lower(e.dev)
+		if len(e.ports) == 3 && has(roles[:], "d", "g", "s") && symbol_find(lower(e.dev)) != nil do like = lower(e.dev)
 		what = "JFET"
 	case "D":
 		if len(e.ports) == 2 && has(roles[:], "a", "k") do like = "diode"

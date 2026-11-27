@@ -65,7 +65,7 @@ Drag :: struct {
 
 Dialog_Kind :: enum u8 {
 	None, Open, Save_As, Export_Netlist, Export_CSV, Part_Picker, Part_Edit, Label_Name, Text_Edit,
-	Sim_Command, Simulator_Pick, Text_View, Shortcuts, Confirm_Close, Message, About, Trace_Edit, Import_Model, Pick_Program, Appearance, Diagnostics,
+	Sim_Command, Simulator_Pick, Text_View, Shortcuts, Confirm_Close, Message, About, Trace_Edit, Import_Model, Pick_Program, Appearance, Diagnostics, Import_Repair,
 }
 
 App :: struct {
@@ -89,6 +89,10 @@ App :: struct {
 	dlg_win:     int, // the dialog belongs to the waveform window of this schematic id (0: main window)
 	menu_open:   string,
 	import_for:  int, // the part whose editor started an import (-1: none)
+	// an import waiting for the user's answer in the Import_Repair dialog
+	import_path:   string,
+	import_fixes:  int,
+	import_checks: int,
 }
 
 app: App
@@ -1206,6 +1210,8 @@ gui_main :: proc(files: []string) {
 				case strings.has_prefix(a, "trace:"): wave_add_trace(&doc().wave, a[6:], false)
 				case strings.has_prefix(a, "pane:"): wave_add_trace(&doc().wave, a[5:], true)
 				case strings.has_prefix(a, "fft:"): wave_add_fft(&doc().wave, a[4:])
+				case strings.has_prefix(a, "import:"): // File › Import SPICE model… of a file
+					import_model(doc(), a[7:])
 				case strings.has_prefix(a, "edit:"): // open the editor of a part by name
 					for c, i in doc().sch.comps do if c.ref == a[5:] do dialog_part(doc(), i)
 				case strings.has_prefix(a, "dblclick:"), strings.has_prefix(a, "rclick:"): // a double- or right-click at x,y (fractions of the window) after the run
@@ -1254,7 +1260,24 @@ import_model :: proc(d: ^Doc, path: string) {
 		if open_file(path) do status(tcat("opened the netlist ", base_name(path), " as a schematic – Save writes it as .edn"))
 		return
 	}
-	res, ok := import_model_file(path)
+	// faults: the user decides (draw_import_repair), then import_model_apply
+	if text, tok := read_text(path, context.temp_allocator); tok {
+		_, rep := model_repair(text, import_dest(path))
+		if len(rep.fixes) + len(rep.checks) > 0 {
+			set_str(&app.import_path, path)
+			app.import_fixes, app.import_checks = len(rep.fixes), len(rep.checks)
+			set_str(&app.dlg.title, tcat("Problems in ", base_name(path)))
+			set_str(&app.dlg.text, repair_report_text(&rep))
+			dialog_open(.Import_Repair)
+			return
+		}
+	}
+	import_model_apply(d, path, false)
+}
+
+// The import itself, the copy repaired or not.
+import_model_apply :: proc(d: ^Doc, path: string, repair: bool) {
+	res, ok := import_model_file(path, repair)
 	if !ok {
 		message("Import SPICE model", res.message)
 		return
@@ -1267,6 +1290,7 @@ import_model :: proc(d: ^Doc, path: string) {
 	append(&names, ..res.symbols[:])
 	append(&names, ..res.models[:])
 	summary := fmt.tprintf("%s → %s", base_name(path), res.file)
+	if res.repaired > 0 do summary = fmt.tprintf("%s, %d fault(s) repaired", summary, res.repaired)
 	// started from a part's editor: that part gets the model
 	if ci := app.import_for; ci >= 0 && ci < len(d.sch.comps) {
 		app.import_for = -1

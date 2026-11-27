@@ -286,7 +286,14 @@ run_poll :: proc(r: ^Run) -> bool {
 	for f in files {
 		plots, perr := raw_read(f)
 		if len(perr) > 0 do append(&errs, perr)
-		for p in plots do append(&r.plots, p)
+		for &p in plots {
+			// VACASK's DC sweep (spicy's "analysis dcN op" in a sweep) is named "Operating Point"
+			if r.dialect == "vacask" && strings.has_prefix(base_name(f), "dc") && p.npoints > 1 && strings.contains(lower(p.name), "operating") {
+				delete(p.name)
+				p.name = strings.clone("DC transfer characteristic")
+			}
+			append(&r.plots, p)
+		}
 		delete(plots)
 	}
 	// Xyce writes its noise analysis to a text file beside the netlist; VACASK's noise is a raw file

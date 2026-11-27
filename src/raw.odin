@@ -46,8 +46,9 @@ plot_kind :: proc(p: ^Plot) -> string {
 	if i := strings.index(n, " ["); i >= 0 do n = n[:i]
 	switch {
 	case strings.contains(n, "transient"): return "tran"
-	case strings.contains(n, "ac"): return "ac"
+	// "dc" first: ngspice's "DC transfer characteristic" has an "ac" in it
 	case strings.contains(n, "dc"): return "dc"
+	case strings.contains(n, "ac"): return "ac"
 	case strings.contains(n, "operating"): return "op"
 	case strings.contains(n, "noise"): return "noise"
 	}
