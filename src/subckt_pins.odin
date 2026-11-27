@@ -121,13 +121,13 @@ subckt_finish :: proc(e: ^Lib_Entry, file_models: map[string]string) {
 		delete(e.dev)
 		e.dev = strings.clone(subckt_device(e.text, file_models))
 	}
-	if (e.dev == "NPN" || e.dev == "PNP") && raw_equal(e.pins, e.ports) {
+	if (e.dev == "NPN" || e.dev == "PNP") && pins_are_ports(e) {
 		if len(e.ports) == 3 {
 			if r := bjt_port_roles(e); r != nil {e.pins = r; return}
 		}
 		if r := bjt_port_names(e); r != nil do e.pins = r
 	}
-	if e.dev == "D" && len(e.ports) == 2 && raw_equal(e.pins, e.ports) {
+	if e.dev == "D" && len(e.ports) == 2 && pins_are_ports(e) {
 		if r := diode_port_roles(e); r != nil do e.pins = r
 	}
 	// "PIN_ORDER C A" on a diode: C is the cathode, not a collector
@@ -136,6 +136,10 @@ subckt_finish :: proc(e: ^Lib_Entry, file_models: map[string]string) {
 		if (r0 == "c" && r1 == "a") || (r0 == "a" && r1 == "c") {
 			out := make([]string, 2)
 			for p, k in e.pins do out[k] = strings.clone("K" if pin_role(p) == "c" else p)
+			if !pins_are_ports(e) {
+				for p in e.pins do delete(p)
+				delete(e.pins)
+			}
 			e.pins = out
 		}
 	}
@@ -287,9 +291,6 @@ node_groups_join_series :: proc(g: ^Node_Groups, lines: []string, letters: strin
 	}
 }
 
-@(private = "file")
-raw_equal :: proc(a, b: []string) -> bool {return len(a) == len(b) && (len(a) == 0 || raw_data(a) == raw_data(b))}
-
 // The main device of a subcircuit (NMOS, PMOS, NPN, PNP, NJF, PJF, D) from its first
 // transistor and the model that transistor uses; "" when there is none.
 @(private = "file")
@@ -314,7 +315,7 @@ subckt_device :: proc(text: string, file_models: map[string]string) -> string {
 			for x in f[1:] {
 				if t, ok := types[lower(x)]; ok do return t
 				if t, ok := file_models[lower(x)]; ok do return t
-				if e := lib_find(x); e != nil && e.kind != "subckt" do return e.kind
+				if e := lib_find(x); e != nil && !e.subckt do return e.model_type
 			}
 		case 'D', 'd':
 			diode = true
@@ -425,7 +426,7 @@ comp_subckt :: proc(c: ^Comp, sym: ^Symbol, local: []Lib_Entry) -> ^Lib_Entry {
 	f := strings.fields(c.value, context.temp_allocator)
 	if len(f) == 0 do return nil
 	e := model_lookup(f[0], local)
-	if e == nil || e.kind != "subckt" do return nil
+	if e == nil || !e.subckt do return nil
 	// a symbol whose own line already calls a subcircuit with as many pins keeps its line
 	t := strings.trim_space(sym.spice)
 	if len(t) > 0 && (t[0] == 'X' || t[0] == 'x') && len(template_pins(sym)) == len(e.ports) && len(comp_attr(c, "pinmap")) == 0 do return nil
@@ -439,14 +440,14 @@ models_for_symbol :: proc(sym: ^Symbol, local: []Lib_Entry) -> []string {
 	seen := make(map[string]bool, 16, context.temp_allocator)
 	add :: proc(out: ^[dynamic]string, seen: ^map[string]bool, e: ^Lib_Entry, sym: ^Symbol) {
 		if seen[e.name] do return
-		if e.kind == "subckt" {
+		if e.subckt {
 			fits := false
 			for k in sym.models do if e.dev == k || (k == "VDMOS" && (e.dev == "NMOS" || e.dev == "PMOS") && sym_dev_matches(sym, e.dev)) do fits = true
 			if len(sym.models) == 0 && len(e.ports) == len(sym.pins) do fits = true
 			if !fits do return
 		} else {
 			fits := false
-			for k in sym.models do if e.kind == k do fits = true
+			for k in sym.models do if e.model_type == k do fits = true
 			if !fits do return
 		}
 		seen[e.name] = true

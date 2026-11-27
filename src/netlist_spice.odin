@@ -37,7 +37,7 @@ netlist_spice :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: s
 	}
 	dl := directive_lines(s, sim)
 	defined := card_names(dl)
-	for &e in nl.local do if !entry_is_embedded(&e) do defined[e.name] = true // in the directives or the files they include
+	for &e in nl.local do if e.origin != .Embedded do defined[e.name] = true // in the directives or the files they include
 	for name in used_syms {
 		sym := symbol_find(name)
 		if len(sym.defs) > 0 do for k, v in card_names(split_lines(sym.defs)) do defined[k] = v

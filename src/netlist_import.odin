@@ -65,13 +65,15 @@ netlist_import :: proc(text: string) -> (s: Schematic, warnings: [dynamic]string
 	entries := make([dynamic]Lib_Entry, context.temp_allocator)
 	{
 		context.allocator = context.temp_allocator
-		parse_lib_into(&entries, text, "netlist")
+		parse_lib_into(&entries, text, .Directive)
 	}
+	// the type of the .model card of a name, "subckt" for a subcircuit, "" for neither
 	model_type :: proc(name: string, entries: []Lib_Entry) -> string {
 		n := lower(name)
-		for e in entries do if e.name == n do return e.kind
-		if e := lib_find(name); e != nil do return e.kind
-		return ""
+		e := lib_find(name)
+		for &x in entries do if x.name == n {e = &x; break}
+		if e == nil do return ""
+		return "subckt" if e.subckt else e.model_type
 	}
 	directives := make([dynamic]string, context.temp_allocator)
 	parts := make([dynamic]Placed, context.temp_allocator)
@@ -168,7 +170,7 @@ netlist_import :: proc(text: string) -> (s: Schematic, warnings: [dynamic]string
 			e: ^Lib_Entry
 			for &x in entries do if x.name == lower(sub) do e = &x
 			if e == nil do e = lib_find(sub)
-			if e != nil && e.kind == "subckt" && len(e.ports) == ni {
+			if e != nil && e.subckt && len(e.ports) == ni {
 				sym := symbol_find(sub)
 				if sym == nil || len(sym.pins) != ni {
 					edn := auto_symbol(e, entry_display_name(e), "netlist")

@@ -746,7 +746,7 @@ draw_part_edit :: proc(d: ^Doc) {
 				if sub.pins[i] != sub.ports[i] do pn = tcat(pn, " (", sub.pins[i], ")")
 				append(&parts, tcat(pn, " = ", sym.pins[k].name))
 			}
-			info = fmt.tprintf("Subcircuit %s from %s.\nPorts: %s", entry_display_name(sub), base_name(sub.src), strings.join(parts[:], ",  ", context.temp_allocator))
+			info = fmt.tprintf("Subcircuit %s from %s.\nPorts: %s", entry_display_name(sub), base_name(entry_from(sub)), strings.join(parts[:], ",  ", context.temp_allocator))
 		}
 		draw_wrapped(info, cut_top(&b, fs() * 2.8), th.err if len(err) > 0 else th.muted, fs(0.9))
 		r = row(&b)

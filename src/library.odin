@@ -8,15 +8,55 @@ import "core:strings"
 
 DEFAULT_MODELS_LIB :: #load("../models/standard.lib", string)
 
+// A .model card or a .subckt … .ends block.
 Lib_Entry :: struct {
-	name: string, // lower case
-	kind: string, // model type (D, NPN …) or "subckt"
-	text: string, // the cards
-	src:  string,
+	name:       string, // lower case
+	subckt:     bool, // a subcircuit; else a .model card
+	model_type: string, // the .model card's type (D, NPN, NMOS …), "" for a subcircuit
+	text:       string, // the cards
+	origin:     Lib_Origin,
+	file:       string, // the file it was read from; for an embedded copy, the file it was copied from
 	// subcircuits
 	ports: []string, // as on the .subckt line
 	pins:  []string, // terminal names (from a "TERMINALS: D G S" comment, else the ports)
 	dev:   string, // main device: NMOS PMOS NPN PNP NJF PJF D, or ""
+}
+
+// Where a library entry comes from.
+Lib_Origin :: enum u8 {
+	Library, // a model file: :model-libraries, an imported model, an .include'd file, a file being read
+	Builtin, // spicy's own models/standard.lib
+	Directive, // a .model or .subckt directive of the schematic (or of the netlist being imported)
+	Embedded, // the copy saved in the schematic
+}
+
+// An entry's strings, allocated with the allocator that parsed it (parse_lib_into). The pins
+// may be the ports themselves (pins_are_ports).
+lib_entry_free :: proc(e: ^Lib_Entry) {
+	delete(e.name); delete(e.model_type); delete(e.text); delete(e.file); delete(e.dev)
+	if !pins_are_ports(e) {
+		for p in e.pins do delete(p)
+		delete(e.pins)
+	}
+	for p in e.ports do delete(p)
+	delete(e.ports)
+	e^ = {}
+}
+
+// Whether a subcircuit's pin names are its port names (the same slice: nothing better found).
+pins_are_ports :: proc(e: ^Lib_Entry) -> bool {
+	return len(e.pins) == len(e.ports) && (len(e.pins) == 0 || raw_data(e.pins) == raw_data(e.ports))
+}
+
+// Where an entry comes from, in short (VACASK netlist comments, the part dialog).
+entry_from :: proc(e: ^Lib_Entry) -> string {
+	switch e.origin {
+	case .Builtin: return "built-in models"
+	case .Directive: return "schematic"
+	case .Embedded: return tcat("embedded copy (", e.file, ")")
+	case .Library:
+	}
+	return e.file
 }
 
 model_lib: [dynamic]Lib_Entry
@@ -28,6 +68,7 @@ user_models_dir :: proc() -> string {return path_join(data_dir(), "models")}
 // The first entry of a name wins (lib_find): the libraries in settings.edn, then the imported
 // ones, then spicy's built-in models, so a manufacturer's BSS84 replaces the generic one.
 models_load :: proc() {
+	for &e in model_lib do lib_entry_free(&e)
 	clear(&model_lib)
 	for p in S.model_libraries {
 		text, ok := read_text(p, context.temp_allocator)
@@ -35,10 +76,10 @@ models_load :: proc() {
 			config_error(tcat("settings.edn: cannot read model library ", p))
 			continue
 		}
-		parse_lib(strings.clone(text), p)
+		parse_lib(text, .Library, p)
 	}
 	models_load_user()
-	parse_lib(DEFAULT_MODELS_LIB, "built-in models")
+	parse_lib(DEFAULT_MODELS_LIB, .Builtin)
 }
 
 // Model files in the data folder's models/ (imported ones), read after the built-in library.
@@ -47,24 +88,24 @@ models_load_user :: proc() {
 	if !dir_exists(d) do return
 	_, files := list_dir(d, MODEL_EXTS)
 	for f in files {
-		p := strings.clone(path_join(d, f))
-		text, ok := read_text(p)
+		p := path_join(d, f)
+		text, ok := read_text(p, context.temp_allocator)
 		if !ok do continue
-		parse_lib(text, p)
+		parse_lib(text, .Library, p)
 	}
 }
 
 // Reads the .model and .subckt cards of a SPICE library (continuation lines joined).
-parse_lib :: proc(text, src: string) {parse_lib_into(&model_lib, text, src)}
+parse_lib :: proc(text: string, origin: Lib_Origin, file := "") {parse_lib_into(&model_lib, text, origin, file)}
 
-parse_lib_into :: proc(list: ^[dynamic]Lib_Entry, text, src: string) {
+parse_lib_into :: proc(list: ^[dynamic]Lib_Entry, text: string, origin: Lib_Origin, file := "") {
 	lines := split_lines(text)
 	first := len(list^)
 	defer {
 		// subcircuits that use a .model card of the file from outside themselves
 		types := make(map[string]string, 64, context.temp_allocator)
-		for &e in list[first:] do if e.kind != "subckt" do types[e.name] = e.kind
-		for &e in list[first:] do if e.kind == "subckt" && len(e.dev) == 0 do subckt_finish(&e, types)
+		for &e in list[first:] do if !e.subckt do types[e.name] = e.model_type
+		for &e in list[first:] do if e.subckt && len(e.dev) == 0 do subckt_finish(&e, types)
 	}
 	i := 0
 	for i < len(lines) {
@@ -87,7 +128,7 @@ parse_lib_into :: proc(list: ^[dynamic]Lib_Entry, text, src: string) {
 			f := strings.fields(replace_parens(full), context.temp_allocator)
 			if len(f) >= 3 {
 				kind := upper(f[2])
-				append(list, Lib_Entry{name = strings.clone(lower(f[1])), kind = strings.clone(kind), text = strings.clone(full), src = src})
+				append(list, Lib_Entry{name = strings.clone(lower(f[1])), model_type = strings.clone(kind), text = strings.clone(full), origin = origin, file = strings.clone(file)})
 			}
 			i = j
 			continue
@@ -103,7 +144,7 @@ parse_lib_into :: proc(list: ^[dynamic]Lib_Entry, text, src: string) {
 				j += 1
 			}
 			if len(f) >= 2 {
-				e := Lib_Entry{name = strings.clone(lower(f[1])), kind = "subckt", text = strings.clone(strings.trim_space(strings.to_string(b))), src = src}
+				e := Lib_Entry{name = strings.clone(lower(f[1])), subckt = true, text = strings.clone(strings.trim_space(strings.to_string(b))), origin = origin, file = strings.clone(file)}
 				subckt_info(&e, lines, i)
 				append(list, e)
 			}
@@ -134,7 +175,7 @@ model_lookup :: proc(name: string, local: []Lib_Entry) -> ^Lib_Entry {
 lib_models_of :: proc(kinds: []string) -> []string {
 	out := make([dynamic]string, context.temp_allocator)
 	for e in model_lib {
-		for k in kinds do if e.kind == k {
+		for k in kinds do if !e.subckt && e.model_type == k {
 			// the original spelling from the card
 			f := strings.fields(replace_parens(e.text), context.temp_allocator)
 			append(&out, f[1] if len(f) > 1 else e.name)
@@ -154,14 +195,15 @@ entry_display_name :: proc(e: ^Lib_Entry) -> string {
 model_source :: proc(name: string, local: []Lib_Entry) -> (from: string, differs: bool) {
 	e := model_lookup(name, local)
 	if e == nil do return "", false
-	switch {
-	case entry_is_embedded(e):
+	switch e.origin {
+	case .Embedded:
 		l := lib_find(name)
-		return tcat("the copy saved in this schematic (", e.src[len("embedded copy ("):]), l != nil && strings.trim_space(l.text) != strings.trim_space(e.text)
-	case e.src == "schematic": return "a directive in this schematic", false
-	case e.src == "built-in models": return "spicy's built-in models", false
+		return tcat("the copy saved in this schematic (", e.file, ")"), l != nil && strings.trim_space(l.text) != strings.trim_space(e.text)
+	case .Directive: return "a directive in this schematic", false
+	case .Builtin: return "spicy's built-in models", false
+	case .Library:
 	}
-	return e.src, false
+	return e.file, false
 }
 
 DEFAULT_MODEL_CARDS := [?][2]string {
@@ -189,11 +231,11 @@ sch_models :: proc(s: ^Schematic, sim: ^Simulator_Def, base_dir: string) -> []Li
 			if !ok do continue
 			body = b
 		}
-		parse_lib_into(&out, body, "schematic")
+		parse_lib_into(&out, body, .Directive)
 		for l in split_lines(body) {
 			p, is_inc := include_path(l, base_dir)
 			if !is_inc do continue
-			if text, ok := read_text(p); ok do parse_lib_into(&out, text, p)
+			if text, ok := read_text(p); ok do parse_lib_into(&out, text, .Library, p)
 		}
 	}
 	embedded_entries(s, &out)

@@ -239,8 +239,8 @@ symed_open :: proc(src: ^Symbol, d: ^Doc = nil, ci := -1) {
 			e = model_lookup(f[0], sch_models(&d.sch, doc_sim(d), dir_of(d.path)))
 		}
 	}
-	if (e == nil || e.kind != "subckt") && src != nil do e = lib_find(src.name)
-	if e != nil && e.kind == "subckt" {
+	if (e == nil || !e.subckt) && src != nil do e = lib_find(src.name)
+	if e != nil && e.subckt {
 		symed.model = cl(entry_display_name(e))
 		symed.ports = cl_list(e.ports)
 		symed.terms = cl_list(e.pins)

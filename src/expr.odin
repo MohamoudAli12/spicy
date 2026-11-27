@@ -461,7 +461,7 @@ p_channel_part :: proc(s: ^Schematic, ref: string) -> bool {
 		}
 		if len(card) == 0 {
 			if e := lib_find(name); e != nil {
-				if e.kind == "subckt" do return false
+				if e.subckt do return false
 				card = e.text
 			} else do card = tcat(".model ", name, " ", name)
 		}

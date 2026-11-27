@@ -723,7 +723,7 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 				if letter == 'x' && (subs[c] || top_sub[c]) do found = true
 				if letter != 'x' && top_model[c] do found = true
 				if letter != 'x' do for m in models do if m.name == c do found = true
-				for &le in model_lib do if le.name == c && le.src != replacing && (le.kind == "subckt") == (letter == 'x') do found = true
+				for &le in model_lib do if le.name == c && !(le.origin == .Library && le.file == replacing) && le.subckt == (letter == 'x') do found = true
 			}
 			if found do continue
 			name := cands[len(cands) - 1] if letter == 'x' else cands[0]

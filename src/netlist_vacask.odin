@@ -258,7 +258,7 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 	append(&all_cards, ..model_cards[:])
 	vo := Vacask_Out{defs = strings.builder_make(context.temp_allocator), loads = &loads, models = &models, done = make(map[string]bool, 8, context.temp_allocator), local = nl.local}
 	for e in cards {
-		if e.kind == "subckt" {
+		if e.subckt {
 			vacask_subckt(nl, &vo, e)
 			continue
 		}
@@ -747,7 +747,7 @@ vacask_subckt :: proc(nl: ^Netlist, o: ^Vacask_Out, e: ^Lib_Entry) {
 	}
 	ports := make([dynamic]string, context.temp_allocator)
 	for p in e.ports do append(&ports, vnode_name(p))
-	fmt.sbprintf(&o.defs, "\n// %s (from %s)\nsubckt %s (%s)\n", entry_display_name(e), e.src, vacask_name(e.name), strings.join(ports[:], " ", context.temp_allocator))
+	fmt.sbprintf(&o.defs, "\n// %s (from %s)\nsubckt %s (%s)\n", entry_display_name(e), entry_from(e), vacask_name(e.name), strings.join(ports[:], " ", context.temp_allocator))
 	if len(params) > 0 do fmt.sbprintf(&o.defs, "  parameters %s\n", params)
 	strings.write_string(&o.defs, strings.to_string(body))
 	strings.write_string(&o.defs, "ends\n")
@@ -817,13 +817,13 @@ vacask_element :: proc(nl: ^Netlist, o: ^Vacask_Out, line: string, local_models:
 	is_model :: proc(n: string, local: map[string]bool) -> bool {
 		if local[lower(n)] do return true
 		e := lib_find(n)
-		return e != nil && e.kind != "subckt"
+		return e != nil && !e.subckt
 	}
 	// a library model used inside the subcircuit goes to the toplevel
 	need_model :: proc(nl: ^Netlist, o: ^Vacask_Out, n: string, local: map[string]bool) {
 		if local[lower(n)] do return
 		e := model_lookup(n, o.local)
-		if e == nil || e.kind == "subckt" do return
+		if e == nil || e.subckt do return
 		osdi, ml, err := vacask_model(e.text)
 		if len(err) > 0 {
 			append(&nl.errors, err)
@@ -894,7 +894,7 @@ vacask_element :: proc(nl: ^Netlist, o: ^Vacask_Out, line: string, local_models:
 		if len(plain) < 2 do return "", fmt.tprintf("\"%s\": nodes and a subcircuit needed", line)
 		sub := plain[len(plain) - 1]
 		e := model_lookup(sub, o.local)
-		if e == nil || e.kind != "subckt" do return "", fmt.tprintf("\"%s\": subcircuit %s not found", line, sub)
+		if e == nil || !e.subckt do return "", fmt.tprintf("\"%s\": subcircuit %s not found", line, sub)
 		vacask_subckt(nl, o, e)
 		return fmt.tprintf("%s (%s) %s%s", name, nodes(plain[:len(plain) - 1]), vacask_name(sub), extra), ""
 	}

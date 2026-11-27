@@ -349,3 +349,28 @@ fft_pane_setup_round_trip :: proc(t: ^testing.T) {
 	}
 	testing.expectf(t, C.wave_save_setup(&w2) == text, "setup changes when saved again:\n%s\n%s", text, C.wave_save_setup(&w2))
 }
+
+// Loading the library again (after a model import) frees the old entries and reads the same
+// ones: a vendor-style subcircuit keeps its pin names, a .model card its type.
+@(test)
+library_reload :: proc(t: ^testing.T) {
+	setup()
+	lib := `* PIN_ORDER C A
+.SUBCKT ZD 1 2
+D1 2 1 DZ
+.MODEL DZ D(BV=5.1)
+.ENDS
+.MODEL QX NPN(BF=100)
+`
+	for _ in 0 ..< 3 {
+		C.models_load()
+		C.parse_lib(lib, .Library, "test.lib")
+		zd := C.lib_find("zd")
+		testing.expect(t, zd != nil && zd.subckt && zd.origin == .Library && zd.file == "test.lib")
+		if zd != nil do testing.expectf(t, len(zd.pins) == 2 && zd.pins[0] == "K" && zd.pins[1] == "A", "ZD pins %v", zd.pins)
+		qx := C.lib_find("qx")
+		testing.expect(t, qx != nil && !qx.subckt && qx.model_type == "NPN")
+		d := C.lib_find("1n4148")
+		testing.expect(t, d != nil && d.origin == .Builtin)
+	}
+}

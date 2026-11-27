@@ -25,10 +25,7 @@ sch_embed :: proc(s: ^Schematic, base_dir: string) {
 	for t in s.embedded_sym do append(&old_syms, strings.clone(t, context.temp_allocator))
 	embedded_free(s)
 	if !S.embed_models do return
-	// where cards can come from, best first
-	Src :: struct {e: ^Lib_Entry, from: string}
 	includes := make([dynamic]Lib_Entry, context.temp_allocator)
-	inc_from := make([dynamic]string, context.temp_allocator)
 	defined_here := make(map[string]bool, 16, context.temp_allocator)
 	{
 		context.allocator = context.temp_allocator
@@ -40,20 +37,18 @@ sch_embed :: proc(s: ^Schematic, base_dir: string) {
 				if !inc do continue
 				text, ok := read_text(p)
 				if !ok do continue
-				n0 := len(includes)
-				parse_lib_into(&includes, text, p)
-				for _ in n0 ..< len(includes) do append(&inc_from, base_name(p))
+				parse_lib_into(&includes, text, .Library, p)
 			}
 		}
 	}
 	// the schematic's .include files; else the copy it has (whatever the library here has
 	// now); else the library, spicy's built-in models and default cards included
-	find :: proc(name: string, includes: []Lib_Entry, inc_from: []string, old: []Embedded_Model) -> (text, from: string, ok: bool) {
-		for &e, i in includes do if e.name == name do return e.text, inc_from[i], true
+	find :: proc(name: string, includes: []Lib_Entry, old: []Embedded_Model) -> (text, from: string, ok: bool) {
+		for &e in includes do if e.name == name do return e.text, base_name(e.file), true
 		for e in old do if e.name == name do return e.text, e.from, true
 		if e := lib_find(name); e != nil {
-			if e.src == "built-in models" do return e.text, "spicy built-in", true
-			return e.text, base_name(e.src), true
+			if e.origin == .Builtin do return e.text, "spicy built-in", true
+			return e.text, base_name(e.file), true
 		}
 		for d in DEFAULT_MODEL_CARDS do if d[0] == name do return d[1], "spicy default", true
 		return "", "", false
@@ -74,7 +69,7 @@ sch_embed :: proc(s: ^Schematic, base_dir: string) {
 		n := pop(&queue)
 		if seen[n] || defined_here[n] do continue
 		seen[n] = true
-		text, from, ok := find(n, includes[:], inc_from[:], old_models[:])
+		text, from, ok := find(n, includes[:], old_models[:])
 		if !ok do continue
 		append(&s.embedded, Embedded_Model{strings.clone(n), strings.clone(from), strings.clone(text)})
 		words(&queue, text)
@@ -126,13 +121,10 @@ sch_embed :: proc(s: ^Schematic, base_dir: string) {
 embedded_entries :: proc(s: ^Schematic, out: ^[dynamic]Lib_Entry) {
 	context.allocator = context.temp_allocator
 	for e in s.embedded {
-		n0 := len(out)
-		parse_lib_into(out, e.text, "embedded")
-		for i in n0 ..< len(out) do out[i].src = tcat("embedded copy (", e.from, ")")
+		parse_lib_into(out, e.text, .Embedded, e.from)
 	}
 }
 
-entry_is_embedded :: proc(e: ^Lib_Entry) -> bool {return strings.has_prefix(e.src, "embedded copy")}
 
 // Forgets the schematic's copies of the models and subcircuits a library file defines (a
 // model imported for a part replaces the copy of the same name). The next save copies them
@@ -143,7 +135,7 @@ drop_embedded :: proc(s: ^Schematic, lib_file: string) -> int {
 	entries := make([dynamic]Lib_Entry, context.temp_allocator)
 	{
 		context.allocator = context.temp_allocator
-		parse_lib_into(&entries, text, lib_file)
+		parse_lib_into(&entries, text, .Library, lib_file)
 	}
 	n := 0
 	for i := len(s.embedded) - 1; i >= 0; i -= 1 {

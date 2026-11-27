@@ -45,7 +45,7 @@ import_model_file :: proc(src: string, repair := false) -> (res: Import_Result, 
 	entries := make([dynamic]Lib_Entry, context.temp_allocator)
 	{
 		context.allocator = context.temp_allocator
-		parse_lib_into(&entries, text, src)
+		parse_lib_into(&entries, text, .Library, src)
 	}
 	if len(entries) == 0 {
 		res.message = tcat(base_name(src), " has no .model or .subckt")
@@ -66,7 +66,7 @@ import_model_file :: proc(src: string, repair := false) -> (res: Import_Result, 
 	helpers := make([dynamic]string, context.temp_allocator)
 	made := make([dynamic]string, context.temp_allocator)
 	for &e in entries {
-		if e.kind != "subckt" {
+		if !e.subckt {
 			append(&res.models, entry_display_name(&e))
 			continue
 		}
@@ -105,7 +105,7 @@ subckts_called :: proc(entries: []Lib_Entry) -> map[string]bool {
 	called := make(map[string]bool, context.temp_allocator)
 	n := 0
 	for &e in entries {
-		if e.kind != "subckt" do continue
+		if !e.subckt do continue
 		n += 1
 		for l in spice_cards(e.text) {
 			if l[0] != 'x' && l[0] != 'X' do continue
@@ -123,7 +123,7 @@ subckts_called :: proc(entries: []Lib_Entry) -> map[string]bool {
 		}
 	}
 	m := 0
-	for &e in entries do if e.kind == "subckt" && called[e.name] do m += 1
+	for &e in entries do if e.subckt && called[e.name] do m += 1
 	if m == n do clear(&called)
 	return called
 }
