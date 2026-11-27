@@ -22,6 +22,7 @@ Pane :: struct {
 	traces: [dynamic]Trace,
 	auto_y: bool,
 	y0, y1: f64,
+	r0, r1: f64, // the right axis, for a second unit (see pane_axes)
 	p0, p1: f64, // phase axis
 	rect:   Rect, // plot area of the last frame
 	fft:    ^Fft_Pane, // a spectrum pane: the FFT of its traces, on a frequency axis of its own
@@ -50,7 +51,7 @@ X_Axis :: struct {
 	log_x:   bool,
 	auto_x:  bool,
 	x0, x1:  f64,
-	history: [dynamic][4]f64, // x0 x1 + y of the active pane
+	history: [dynamic][6]f64, // x0 x1 + y and right-axis range of the active pane
 	drag_x0: f64,
 	drag_x1: f64,
 }
@@ -310,11 +311,12 @@ wave_fit :: proc(w: ^Wave_View) {
 }
 
 wave_push_history :: proc(w: ^Wave_View) {
-	y0, y1: f64
+	y0, y1, r0, r1: f64
 	if w.active >= 0 && w.active < len(w.panes) {
-		y0, y1 = w.panes[w.active].y0, w.panes[w.active].y1
+		p := &w.panes[w.active]
+		y0, y1, r0, r1 = p.y0, p.y1, p.r0, p.r1
 	}
-	append(&w.history, [4]f64{w.x0, w.x1, y0, y1})
+	append(&w.history, [6]f64{w.x0, w.x1, y0, y1, r0, r1})
 	if len(w.history) > 50 do ordered_remove(&w.history, 0)
 }
 
@@ -336,7 +338,7 @@ wave_zoom_back :: proc(w: ^Wave_View) {
 	w.auto_x = false
 	if w.active >= 0 && w.active < len(w.panes) {
 		p := &w.panes[w.active]
-		p.y0, p.y1 = h[2], h[3]
+		p.y0, p.y1, p.r0, p.r1 = h[2], h[3], h[4], h[5]
 		p.auto_y = false
 	}
 }
@@ -724,6 +726,60 @@ dash_line :: proc(pts: []rl.Vector2, width: f32, col: rl.Color) {
 	}
 }
 
+// The units of a pane's y axes. The first unit of its visible traces goes on the left axis,
+// a second one on a right axis of its own. With a third unit, or a second one while the Bode
+// phase axis takes the right side, the axis shows plain numbers (mixed) and the units are in
+// the legend and the readouts. Traces without a unit go on the left axis.
+Pane_Axes :: struct {
+	left, right: string,
+	dual, mixed: bool,
+}
+
+pane_axes :: proc(w: ^Wave_View, p: ^Pane) -> Pane_Axes {
+	a: Pane_Axes
+	phase := false
+	for t in p.traces {
+		if t.hidden || t.y == nil do continue
+		if t.ph != nil do phase = true
+		if len(t.unit) == 0 do continue
+		switch {
+		case len(a.left) == 0: a.left = t.unit
+		case t.unit == a.left:
+		case len(a.right) == 0: a.right = t.unit
+		case t.unit != a.right: a.mixed = true
+		}
+	}
+	if len(a.right) > 0 && w.complex && S.w_ac_display == "bode" && phase do a.mixed = true
+	a.dual = len(a.right) > 0 && !a.mixed
+	return a
+}
+
+// The y range of the axis a trace is drawn on.
+trace_y_range :: proc(p: ^Pane, a: Pane_Axes, t: Trace) -> (f64, f64) {
+	if a.dual && t.unit == a.right do return p.r0, p.r1
+	return p.y0, p.y1
+}
+
+// Screen height of the value y on an axis showing y0 … y1 in plot.
+y_to_scr :: proc(plot: Rect, y, y0, y1: f64) -> f32 {
+	return plot.y + plot.h - f32((y - y0) / (y1 - y0)) * plot.h
+}
+
+// The value at screen height sy on an axis showing y0 … y1 in plot.
+scr_to_y :: proc(plot: Rect, sy: f32, y0, y1: f64) -> f64 {
+	return y0 + f64((plot.y + plot.h - sy) / plot.h) * (y1 - y0)
+}
+
+// Shows y0 … y1 on the left axis; the right axis zooms and pans with it by the same fractions.
+pane_set_y :: proc(p: ^Pane, y0, y1: f64) {
+	if p.y1 != p.y0 {
+		k := (p.r1 - p.r0) / (p.y1 - p.y0)
+		p.r0, p.r1 = p.r0 + (y0 - p.y0) * k, p.r0 + (y1 - p.y0) * k
+	}
+	p.y0, p.y1 = y0, y1
+	p.auto_y = false
+}
+
 // Screen points of a trace, min/max per pixel column when there are many.
 @(private = "file")
 trace_points :: proc(w: ^Wave_View, ys: []f64, pr: Rect, y0, y1: f64) -> []rl.Vector2 {
@@ -829,6 +885,7 @@ draw_waves :: proc(d: ^Doc, r: Rect) {
 	bode := w.complex && S.w_ac_display == "bode"
 	lm := fsz * 5.2
 	rm := fsz * 4.2 if bode else fsz * 1.2
+	for &p in w.panes do if pane_axes(w, &p).dual do rm = fsz * 4.2
 	bm := fsz * 2.2
 	np := len(w.panes)
 	ph := (body.h - bm) / f32(np)
@@ -853,12 +910,17 @@ draw_waves :: proc(d: ^Doc, r: Rect) {
 		has_phase := false
 		for t in p.traces do if t.ph != nil && !t.hidden do has_phase = true
 		// y range
-		if p.auto_y || p.y1 <= p.y0 {
+		axes := pane_axes(w, p)
+		if p.auto_y || p.y1 <= p.y0 || (axes.dual && p.r1 <= p.r0) {
 			lo, hi := math.INF_F64, -math.INF_F64
+			rlo, rhi := math.INF_F64, -math.INF_F64
 			plo, phi := math.INF_F64, -math.INF_F64
 			for t in p.traces {
 				if t.hidden || t.y == nil do continue
-				if a, b, ok := data_range(w.x, t.y, w.x0, w.x1); ok {lo = min(lo, a); hi = max(hi, b)}
+				if a, b, ok := data_range(w.x, t.y, w.x0, w.x1); ok {
+					if axes.dual && t.unit == axes.right {rlo = min(rlo, a); rhi = max(rhi, b)}
+					else {lo = min(lo, a); hi = max(hi, b)}
+				}
 				if t.ph != nil {
 					if a, b, ok := data_range(w.x, t.ph, w.x0, w.x1); ok {plo = min(plo, a); phi = max(phi, b)}
 				}
@@ -867,6 +929,8 @@ draw_waves :: proc(d: ^Doc, r: Rect) {
 			// spectra in dB: the top 120 dB, not the numerical noise floor far below
 			if p.fft != nil && p.fft.db && S.w_fft_db_range > 0 do lo = max(lo, hi - S.w_fft_db_range)
 			p.y0, p.y1 = pad_range(lo, hi)
+			if rlo > rhi {rlo, rhi = -1, 1}
+			p.r0, p.r1 = pad_range(rlo, rhi)
 			if plo > phi {plo, phi = -180, 180}
 			// phase on multiples of 45°
 			p.p0 = math.floor(plo / 45) * 45
@@ -877,13 +941,24 @@ draw_waves :: proc(d: ^Doc, r: Rect) {
 		// grid + y labels
 		ny := max(2, int(plot.h / (fsz * 3)))
 		yt := ticks_lin(p.y0, p.y1, ny)
-		unit := ""
-		for t in p.traces do if len(t.unit) > 0 {unit = t.unit; break}
+		// with two axes each one's labels take the colour of its first trace
+		lcol, rcol := th.w_text, th.w_text
+		if axes.dual {
+			for t in p.traces do if !t.hidden && t.y != nil && t.unit == axes.left {lcol = trace_color(t.color); break}
+			for t in p.traces do if !t.hidden && t.y != nil && t.unit == axes.right {rcol = trace_color(t.color); break}
+		}
 		for y in yt {
-			sy := plot.y + plot.h - f32((y - p.y0) / (p.y1 - p.y0)) * plot.h
+			sy := y_to_scr(plot, y, p.y0, p.y1)
 			if S.w_grid do grid_line(plot.x, sy, plot.x + plot.w, sy)
-			lab := fmt_eng(y, unit, 3)
-			draw_text(lab, plot.x - text_w(lab, fsz) - 6, sy - fsz / 2, th.w_text, fsz)
+			lab := fmt_eng(y, "" if axes.mixed else axes.left, 3)
+			draw_text(lab, plot.x - text_w(lab, fsz) - 6, sy - fsz / 2, lcol, fsz)
+		}
+		if axes.dual {
+			for y in ticks_lin(p.r0, p.r1, ny) {
+				sy := y_to_scr(plot, y, p.r0, p.r1)
+				lab := fmt_eng(y, axes.right, 3)
+				draw_text(lab, plot.x + plot.w + 6, sy - fsz / 2, rcol, fsz)
+			}
 		}
 		if bode && has_phase {
 			step := 45.0
@@ -915,7 +990,8 @@ draw_waves :: proc(d: ^Doc, r: Rect) {
 			col := rlc(trace_color(t.color))
 			wid := lw
 			if w.sel.pane == pi && w.sel.trace == ti do wid = S.w_line_hover
-			pts := trace_points(w, t.y, plot, p.y0, p.y1)
+			ty0, ty1 := trace_y_range(p, axes, t)
+			pts := trace_points(w, t.y, plot, ty0, ty1)
 			if len(pts) >= 2 do rl.DrawSplineLinear(raw_data(pts), i32(len(pts)), wid, col)
 			else if len(pts) == 1 do rl.DrawCircleV(pts[0], wid, col)
 			if t.ph != nil && bode {
@@ -945,7 +1021,8 @@ draw_waves :: proc(d: ^Doc, r: Rect) {
 			if t.y == nil do continue
 			y := interp(w.x, t.y, mk.x)
 			sx := x_to_scr(w, plot, mk.x)
-			sy := plot.y + plot.h - f32((y - p.y0) / (p.y1 - p.y0)) * plot.h
+			my0, my1 := trace_y_range(p, axes, t^)
+			sy := y_to_scr(plot, y, my0, my1)
 			if sx < plot.x || sx > plot.x + plot.w do continue
 			col := trace_color(t.color)
 			rl.DrawCircleV({sx, sy}, S.w_marker_radius * ui_scale, rlc(th.w_marker))
@@ -972,7 +1049,8 @@ draw_waves :: proc(d: ^Doc, r: Rect) {
 			draw_text(fmt.tprintf("%d", k + 1), sx + 3, plot.y + 2, col, fsz)
 			if c.trace >= 0 && c.trace < len(p.traces) && p.traces[c.trace].y != nil {
 				y := interp(w.x, p.traces[c.trace].y, c.x)
-				sy := plot.y + plot.h - f32((y - p.y0) / (p.y1 - p.y0)) * plot.h
+				cy0, cy1 := trace_y_range(p, axes, p.traces[c.trace])
+				sy := y_to_scr(plot, y, cy0, cy1)
 				line(plot.x, sy, plot.x + plot.w, sy, alpha(col, 110), 1)
 				rl.DrawCircleLinesV({sx, sy}, 5 * ui_scale, rlc(col))
 			}
@@ -1064,9 +1142,11 @@ x_ticks :: proc(w: ^Wave_View, plot: Rect, fsz: f32) -> []X_Tick {
 @(private = "file")
 draw_legend :: proc(w: ^Wave_View, pi: int, r: Rect, fsz: f32) {
 	p := &w.panes[pi]
+	axes := pane_axes(w, p)
 	x := r.x
 	for &t, ti in p.traces {
 		lab := t.expr
+		if axes.mixed && len(t.unit) > 0 do lab = tcat(lab, " [", t.unit, "]")
 		if len(t.err) > 0 do lab = tcat(t.expr, "  – ", t.err)
 		tw := text_w(lab, fsz) + 22
 		lr := Rect{x, r.y, tw, r.h}
@@ -1106,7 +1186,7 @@ draw_cursor_box :: proc(w: ^Wave_View, body: Rect, fsz: f32) {
 	lines := make([dynamic]string, context.temp_allocator)
 	vals: [2][2]f64
 	have: [2]bool
-	unit := ""
+	units: [2]string
 	x_unit := w.x_unit
 	for k in 0 ..< 2 {
 		c := w.cursors[k]
@@ -1121,7 +1201,7 @@ draw_cursor_box :: proc(w: ^Wave_View, body: Rect, fsz: f32) {
 			t := &w.panes[c.pane].traces[c.trace]
 			if t.y != nil {
 				y = interp(w.x, t.y, c.x)
-				unit = t.unit
+				units[k] = t.unit
 				name = t.expr
 				if t.ph != nil && S.w_ac_display == "bode" {
 					ph := interp(w.x, t.ph, c.x)
@@ -1132,7 +1212,7 @@ draw_cursor_box :: proc(w: ^Wave_View, body: Rect, fsz: f32) {
 				}
 			}
 		}
-		append(&lines, fmt.tprintf("Cursor %d  %s:  %s   %s", k + 1, name, fmt_eng(c.x, w.x_unit, 5), fmt_eng(y, unit, 5)))
+		append(&lines, fmt.tprintf("Cursor %d  %s:  %s   %s", k + 1, name, fmt_eng(c.x, w.x_unit, 5), fmt_eng(y, units[k], 5)))
 		vals[k] = {c.x, y}
 		have[k] = true
 	}
@@ -1141,6 +1221,7 @@ draw_cursor_box :: proc(w: ^Wave_View, body: Rect, fsz: f32) {
 	if have[0] && have[1] && same_axis {
 		dx := vals[1][0] - vals[0][0]
 		dy := vals[1][1] - vals[0][1]
+		unit := units[0] if units[0] == units[1] else ""
 		append(&lines, fmt.tprintf("Δx %s   Δy %s", fmt_eng(dx, x_unit, 5), fmt_eng(dy, unit, 5)))
 		if dx != 0 {
 			su := unit_div(unit, x_unit) if len(unit) > 0 && len(x_unit) > 0 else ""
@@ -1450,10 +1531,8 @@ wave_interact :: proc(d: ^Doc, w: ^Wave_View, body: Rect, fsz: f32) {
 			f := math.pow(S.w_zoom_speed, -f64(ui.wheel))
 			p := &w.panes[pi]
 			if ui.ctrl {
-				my := p.y0 + f64((plot.y + plot.h - m.y) / plot.h) * (p.y1 - p.y0)
-				p.y0 = my - (my - p.y0) * f
-				p.y1 = my + (p.y1 - my) * f
-				p.auto_y = false
+				my := scr_to_y(plot, m.y, p.y0, p.y1)
+				pane_set_y(p, my - (my - p.y0) * f, my + (p.y1 - my) * f)
 			} else if ui.shift {
 				a, b := xv(w, w.x0), xv(w, w.x1)
 				sh := (b - a) * 0.1 * f64(ui.wheel)
@@ -1497,10 +1576,7 @@ wave_interact :: proc(d: ^Doc, w: ^Wave_View, body: Rect, fsz: f32) {
 				w.auto_x = false
 				p := &w.panes[pane]
 				if !only_x {
-					y1 := p.y0 + f64((plot.y + plot.h - zr.y) / plot.h) * (p.y1 - p.y0)
-					y0 := p.y0 + f64((plot.y + plot.h - zr.y - zr.h) / plot.h) * (p.y1 - p.y0)
-					p.y0, p.y1 = y0, y1
-					p.auto_y = false
+					pane_set_y(p, scr_to_y(plot, zr.y + zr.h, p.y0, p.y1), scr_to_y(plot, zr.y, p.y0, p.y1))
 				} else {
 					for &q in w.panes do q.auto_y = true
 				}
@@ -1521,8 +1597,7 @@ wave_interact :: proc(d: ^Doc, w: ^Wave_View, body: Rect, fsz: f32) {
 		w.auto_x = false
 		p := &w.panes[pane]
 		ys := f64(dd.y / plot.h) * (w.drag_y1 - w.drag_y0)
-		p.y0, p.y1 = w.drag_y0 + ys, w.drag_y1 + ys
-		p.auto_y = false
+		pane_set_y(p, w.drag_y0 + ys, w.drag_y1 + ys)
 		ui.cursor = .RESIZE_ALL
 		if !ui.down[0] && !ui.down[2] do w.drag = .None
 	case .Cursor1, .Cursor2:
@@ -1550,6 +1625,7 @@ wave_interact :: proc(d: ^Doc, w: ^Wave_View, body: Rect, fsz: f32) {
 		defer wave_axis_swap(w, pi)
 		p := &w.panes[pi]
 		plot := p.rect
+		axes := pane_axes(w, p)
 		line(m.x, plot.y, m.x, plot.y + plot.h, alpha(th.w_hover, 120), 1)
 		sb := strings.builder_make(context.temp_allocator)
 		fmt.sbprintf(&sb, "%s", fmt_eng(wave_mouse_x, w.x_unit, 5))
@@ -1558,16 +1634,18 @@ wave_interact :: proc(d: ^Doc, w: ^Wave_View, body: Rect, fsz: f32) {
 			if t.y == nil || t.hidden do continue
 			if n >= S.w_max_tooltip do break
 			y := interp(w.x, t.y, wave_mouse_x)
-			sy := plot.y + plot.h - f32((y - p.y0) / (p.y1 - p.y0)) * plot.h
+			hy0, hy1 := trace_y_range(p, axes, t)
+			sy := y_to_scr(plot, y, hy0, hy1)
 			if sy >= plot.y && sy <= plot.y + plot.h do rl.DrawCircleV({m.x, sy}, 3.5 * ui_scale, rlc(trace_color(t.color)))
 			fmt.sbprintf(&sb, "\n%s = %s", t.expr, fmt_eng(y, t.unit, 5))
 			if t.ph != nil && S.w_ac_display == "bode" do fmt.sbprintf(&sb, ", %.2f°", interp(w.x, t.ph, wave_mouse_x))
 			n += 1
 		}
 		// the y value under the mouse
-		my := p.y0 + f64((plot.y + plot.h - m.y) / plot.h) * (p.y1 - p.y0)
-		unit := p.traces[0].unit if len(p.traces) > 0 else ""
-		fmt.sbprintf(&sb, "\n(mouse y %s)", fmt_eng(my, unit, 4))
+		my := scr_to_y(plot, m.y, p.y0, p.y1)
+		fmt.sbprintf(&sb, "\n(mouse y %s", fmt_eng(my, "" if axes.mixed else axes.left, 4))
+		if axes.dual do fmt.sbprintf(&sb, ", %s", fmt_eng(scr_to_y(plot, m.y, p.r0, p.r1), axes.right, 4))
+		fmt.sbprintf(&sb, ")")
 		ui.tip = strings.to_string(sb)
 		if ui.tip_id != id_of("wave.hover") {
 			ui.tip_id = id_of("wave.hover")
@@ -1588,11 +1666,13 @@ wave_trace_near :: proc(w: ^Wave_View, pane: int, y: f32, tol: f32) -> int {
 	if pane < 0 || pane >= len(w.panes) do return -1
 	p := &w.panes[pane]
 	plot := p.rect
+	axes := pane_axes(w, p)
 	best, bt := tol, -1
 	for t, ti in p.traces {
-		if t.y == nil || t.hidden || p.y1 == p.y0 do continue
+		ty0, ty1 := trace_y_range(p, axes, t)
+		if t.y == nil || t.hidden || ty1 == ty0 do continue
 		v := interp(w.x, t.y, wave_mouse_x)
-		sy := plot.y + plot.h - f32((v - p.y0) / (p.y1 - p.y0)) * plot.h
+		sy := y_to_scr(plot, v, ty0, ty1)
 		if abs(sy - y) < best {best = abs(sy - y); bt = ti}
 	}
 	return bt
