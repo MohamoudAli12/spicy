@@ -1,5 +1,6 @@
 package spicy_tests
 
+import "core:fmt"
 import "core:math"
 import os "core:os"
 import "core:strings"
@@ -397,6 +398,44 @@ menus_do_something :: proc(t: ^testing.T) {
 			}
 			testing.expectf(t, n == 1, "%s › %q does %d things", m, e.item, n)
 			if len(e.action) > 0 do testing.expectf(t, known[e.action], "%s › %q runs %q, not an action", m, e.item, e.action)
+		}
+	}
+}
+
+// The :defs of the symbols a schematic uses go into the netlist in the order the parts use
+// them, the same every time.
+@(test)
+symbol_defs_order :: proc(t: ^testing.T) {
+	setup()
+	names := []string{"d1", "d2", "d3", "d4", "d5", "d6", "d7", "d8"}
+	for n in names {
+		// (no fmt: it reads { as the start of an argument)
+		text := C.tcat(`{:name "`, n, `" :like "res" :defs "* defs `, n, `" :vacask {:line "{ref} ({A} {B}) spicy_r r={value}" :load ["spice/resistor.osdi"] :models ["model spicy_r sp_resistor"] :defs "// defs `, n, `"}}`)
+		m, perr := C.edn_parse(text)
+		testing.expectf(t, perr == "", "%s: %s", text, perr)
+		sym, ok := C.symbol_from_edn(m, "test", "test")
+		testing.expectf(t, ok, "symbol %s: %v", n, C.config_errors)
+		append(&C.symbols, sym)
+	}
+	// placed in the order d8, d7 … d1
+	b := strings.builder_make(context.temp_allocator)
+	strings.write_string(&b, `{:spicy-schematic 1 :components [`)
+	for k in 0 ..< len(names) {
+		n := names[len(names) - 1 - k]
+		strings.write_string(&b, C.tcat(`{:symbol "`, n, `" :ref "R`, C.itoa(k + 1), `" :value "1k" :at [`, C.itoa(k * 128), ` 0]}`))
+	}
+	strings.write_string(&b, `] :flags [{:name "0" :at [16 16]}] :texts [{:at [0 300] :text ".op" :directive true}]}`) // R1.A on ground
+	s, err := C.sch_from_edn(strings.to_string(b))
+	testing.expect_value(t, err, "")
+	sims := [2][2]string{{"ngspice", "* defs "}, {"vacask", "// defs "}}
+	for x in sims {
+		nl := C.netlist_build(&s, C.simulator_def(x[0]), "defs")
+		testing.expectf(t, len(nl.errors) == 0, "%s: %v", x[0], nl.errors)
+		at := -1
+		for k in 0 ..< len(names) {
+			i := strings.index(nl.text, C.tcat(x[1], names[len(names) - 1 - k]))
+			testing.expectf(t, i > at, "%s: the defs of %s are not after the one before (%d, %d)\n%s", x[0], names[len(names) - 1 - k], i, at, nl.text)
+			at = i
 		}
 	}
 }

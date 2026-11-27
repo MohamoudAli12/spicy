@@ -13,7 +13,7 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 	loads := make([dynamic]string, context.temp_allocator)
 	models := make([dynamic]string, context.temp_allocator)
 	check_pins(nl, s)
-	used := make(map[string]bool, 16, context.temp_allocator)
+	used := make([dynamic]string, context.temp_allocator) // the symbols, in the order the parts use them
 	sub_needed := make([dynamic]^Lib_Entry, context.temp_allocator)
 	vnode :: proc(n: string) -> string {return n if n == "0" else lower(n)}
 	// initial conditions for the transient analysis (VACASK takes them there, not on the
@@ -37,7 +37,7 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 			append(&nl.errors, fmt.tprintf("%s: the symbol \"%s\" has no :vacask netlist line", c.ref, sym.name))
 			continue
 		}
-		used[sym.name] = true
+		add_unique(&used, sym.name)
 		nodes := make([]string, len(sym.pins), context.temp_allocator)
 		for k in 0 ..< len(sym.pins) do nodes[k] = vnode(nl.nets.names[nl.nets.pin_net[ci][k]])
 		// sense sources in series with the pins

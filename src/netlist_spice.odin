@@ -9,7 +9,7 @@ netlist_spice :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: s
 	b := strings.builder_make(context.temp_allocator)
 	fmt.sbprintf(&b, "* %s\n", title)
 	check_pins(nl, s)
-	used_syms := make(map[string]bool, 16, context.temp_allocator)
+	used_syms := make([dynamic]string, context.temp_allocator) // in the order the parts use them
 	for &c, ci in s.comps {
 		sym := symbol_find(c.sym)
 		if sym == nil {
@@ -26,7 +26,7 @@ netlist_spice :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: s
 		if lines, ok := nonideal_lines(nl, &c, sym, nodes, false); ok do strings.write_string(&b, lines)
 		else do strings.write_string(&b, fill_template(nl, sym.spice, &c, sym, nodes, false))
 		strings.write_byte(&b, '\n')
-		used_syms[sym.name] = true
+		add_unique(&used_syms, sym.name)
 	}
 	for name in used_syms {
 		sym := symbol_find(name)
