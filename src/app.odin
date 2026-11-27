@@ -617,132 +617,150 @@ handle_keys :: proc() {
 // ---------------------------------------------------------------------------
 // Window
 
-menu_items :: proc(name: string) -> []string {
+// One item of a menu-bar menu: the text the menu draws and what picking it does.
+Menu_Entry :: struct {
+	item:   string, // as the menu draws it: "-" a line, "~" disabled, "✓ " checked, then "\t" and the keys
+	action: string, // the action it runs (run_action), or else
+	pick:   proc(arg: string), // what it does, with arg
+	arg:    string,
+	sub:    proc(i: int), // a submenu (its items from view_submenu): what picking its item i does
+}
+
+MENUS := [?]string{"File", "Edit", "Place", "View", "Simulate", "Waveforms", "Help"}
+
+menu_entries :: proc(name: string) -> []Menu_Entry {
 	d := doc()
-	k :: proc(label, action: string) -> string {
-		ks := action_keys_text(action)
-		return tcat(label, "\t", ks) if len(ks) > 0 else label
+	items := make([dynamic]Menu_Entry, context.temp_allocator)
+	// an action, with its keys; checked: a tick before it; enabled false: greyed out
+	act :: proc(items: ^[dynamic]Menu_Entry, label, action: string, checked := false, enabled := true) {
+		t := tcat("✓ ", label) if checked else label
+		if ks := action_keys_text(action); len(ks) > 0 do t = tcat(t, "\t", ks)
+		append(items, Menu_Entry{item = t if enabled else tcat("~", t), action = action})
 	}
-	items := make([dynamic]string, context.temp_allocator)
+	other :: proc(items: ^[dynamic]Menu_Entry, text: string, pick: proc(arg: string), arg := "") {
+		append(items, Menu_Entry{item = text, pick = pick, arg = arg})
+	}
+	sep :: proc(items: ^[dynamic]Menu_Entry) {append(items, Menu_Entry{item = "-"})}
 	switch name {
 	case "File":
-		append(&items, k("New", "file/new"), k("Open…", "file/open"), k("Save", "file/save"), k("Save as…", "file/save-as"), "-", k("Import SPICE model…", "file/import-model"), "-")
-		for r in pref_list("recent")[:min(8, len(pref_list("recent")))] do append(&items, tcat("Recent: ", base_name(r)))
-		append(&items, "-", k("Export netlist…", "file/export-netlist"), k("Export waveforms (CSV)…", "wave/export-csv"), "-", k("Close", "file/close"), k("Quit", "file/quit"))
+		act(&items, "New", "file/new"); act(&items, "Open…", "file/open"); act(&items, "Save", "file/save"); act(&items, "Save as…", "file/save-as")
+		sep(&items)
+		act(&items, "Import SPICE model…", "file/import-model")
+		sep(&items)
+		recent := pref_list("recent")
+		for r in recent[:min(8, len(recent))] do other(&items, tcat("Recent: ", base_name(r)), proc(path: string) {open_file(path)}, r)
+		sep(&items)
+		act(&items, "Export netlist…", "file/export-netlist"); act(&items, "Export waveforms (CSV)…", "wave/export-csv")
+		sep(&items)
+		act(&items, "Close", "file/close"); act(&items, "Quit", "file/quit")
 	case "Edit":
-		append(&items, k("Undo", "edit/undo") if len(d.undo) > 0 else tcat("~", k("Undo", "edit/undo")), k("Redo", "edit/redo") if len(d.redo) > 0 else tcat("~", k("Redo", "edit/redo")), "-",
-			k("Cut", "edit/cut"), k("Copy", "edit/copy"), k("Paste", "edit/paste"), k("Duplicate", "edit/duplicate"), k("Delete", "edit/delete"), "-",
-			k("Select all", "edit/select-all"), k("Rotate", "edit/rotate"), k("Mirror", "edit/mirror"), k("Properties…", "edit/properties"))
+		act(&items, "Undo", "edit/undo", enabled = len(d.undo) > 0); act(&items, "Redo", "edit/redo", enabled = len(d.redo) > 0)
+		sep(&items)
+		act(&items, "Cut", "edit/cut"); act(&items, "Copy", "edit/copy"); act(&items, "Paste", "edit/paste"); act(&items, "Duplicate", "edit/duplicate"); act(&items, "Delete", "edit/delete")
+		sep(&items)
+		act(&items, "Select all", "edit/select-all"); act(&items, "Rotate", "edit/rotate"); act(&items, "Mirror", "edit/mirror"); act(&items, "Properties…", "edit/properties")
 	case "Place":
-		append(&items, k("Part…", "place/component"), k("Wire", "place/wire"), k("Ground", "place/ground"), k("Net label…", "place/label"), k("SPICE directive…", "place/directive"), k("Comment…", "place/comment"), k("Import SPICE model…", "file/import-model"), k("New symbol…", "symbol/new"))
+		act(&items, "Part…", "place/component"); act(&items, "Wire", "place/wire"); act(&items, "Ground", "place/ground"); act(&items, "Net label…", "place/label")
+		act(&items, "SPICE directive…", "place/directive"); act(&items, "Comment…", "place/comment"); act(&items, "Import SPICE model…", "file/import-model"); act(&items, "New symbol…", "symbol/new")
 	case "View":
-		append(&items, k("Fit to window", "view/fit"), k("Zoom in", "view/zoom-in"), k("Zoom out", "view/zoom-out"), "-",
-			k(tcat("✓ " if app.show_waves else "", "Waveforms"), "view/toggle-waves"), k("Move the waveforms", "view/next-layout"),
-			k(tcat("✓ " if waves_popped_out(d) else "", "Waveforms in their own window"), "wave/pop-out"), k("Full screen", "view/full-screen"), "-",
-			k("Netlist", "view/netlist"), k("Simulator log", "view/log"), "-", k("Appearance (scale, text size)…", "view/appearance"), "-")
-		append(&items, "Theme\t▸", "UI scale\t▸")
+		act(&items, "Fit to window", "view/fit"); act(&items, "Zoom in", "view/zoom-in"); act(&items, "Zoom out", "view/zoom-out")
+		sep(&items)
+		act(&items, "Waveforms", "view/toggle-waves", checked = app.show_waves); act(&items, "Move the waveforms", "view/next-layout")
+		act(&items, "Waveforms in their own window", "wave/pop-out", checked = waves_popped_out(d)); act(&items, "Full screen", "view/full-screen")
+		sep(&items)
+		act(&items, "Netlist", "view/netlist"); act(&items, "Simulator log", "view/log")
+		sep(&items)
+		act(&items, "Appearance (scale, text size)…", "view/appearance")
+		sep(&items)
+		append(&items, Menu_Entry{item = "Theme\t▸", sub = proc(i: int) {if i < len(themes) do pick_theme(themes[i].name)}})
+		append(&items, Menu_Entry{item = "UI scale\t▸", sub = proc(i: int) {
+			if i == 0 do set_ui_scale(0)
+			else if i - 1 < len(MENU_SCALES) do set_ui_scale(MENU_SCALES[i - 1])
+		}})
 	case "Simulate":
-		append(&items, k("Run", "sim/run"), k("Stop", "sim/stop") if d.run.state == .Running else tcat("~", k("Stop", "sim/stop")), k("Edit simulation command…", "sim/edit-command"), "-",
-			k(tcat("✓ " if d.tool == .Probe else "", "Probe"), "sim/probe"), "-")
+		act(&items, "Run", "sim/run"); act(&items, "Stop", "sim/stop", enabled = d.run.state == .Running); act(&items, "Edit simulation command…", "sim/edit-command")
+		sep(&items)
+		act(&items, "Probe", "sim/probe", checked = d.tool == .Probe)
+		sep(&items)
 		cur := doc_sim(d)
-		for s in S.simulators do append(&items, tcat("✓ " if cur != nil && cur.id == s.id else "   ", "Simulator: ", s.name))
-		append(&items, k("Simulators and their programs…", "sim/simulator"))
+		for sim in S.simulators {
+			other(&items, tcat("✓ " if cur != nil && cur.id == sim.id else "   ", "Simulator: ", sim.name), proc(id: string) {
+				set_str(&doc().sim_override, id)
+				status(tcat("simulator: ", simulator_def(id).name))
+			}, sim.id)
+		}
+		act(&items, "Simulators and their programs…", "sim/simulator")
 	case "Waveforms":
-		append(&items, k("Fit", "view/fit"), k("Previous zoom", "wave/zoom-back"), k("Add plot pane", "wave/add-pane"), k("Cursor 1", "wave/cursor1"), k("Cursor 2", "wave/cursor2"), k("Marker at the mouse", "wave/marker"), k("Next analysis", "wave/next-plot"), "-",
-			k(tcat("✓ " if waves_popped_out(d) else "", "In their own window"), "wave/pop-out"), "-", "Add trace…", k("Remove all traces", "wave/clear"), k("Export CSV…", "wave/export-csv"))
+		// the waveforms (view/fit fits whatever the mouse is over, here the menu)
+		fit := "Fit"
+		if ks := action_keys_text("view/fit"); len(ks) > 0 do fit = tcat(fit, "\t", ks)
+		other(&items, fit, proc(_: string) {wave_fit(&doc().wave)})
+		act(&items, "Previous zoom", "wave/zoom-back"); act(&items, "Add plot pane", "wave/add-pane"); act(&items, "Cursor 1", "wave/cursor1"); act(&items, "Cursor 2", "wave/cursor2")
+		act(&items, "Marker at the mouse", "wave/marker"); act(&items, "Next analysis", "wave/next-plot")
+		sep(&items)
+		act(&items, "In their own window", "wave/pop-out", checked = waves_popped_out(d))
+		sep(&items)
+		other(&items, "Add trace…", proc(_: string) {dialog_trace(doc(), -1, -1)})
+		act(&items, "Remove all traces", "wave/clear"); act(&items, "Export CSV…", "wave/export-csv")
 	case "Help":
 		// the same layout as zapped's and loomer's Help menus
-		append(&items, k("Keyboard shortcuts…", "help/shortcuts"), "-", k("Settings (settings.edn)", "help/settings"), "Themes (themes.edn)", "Shortcuts (shortcuts.edn)", "Symbols folder", k("Config folder", "help/config-folder"), "-", k("Diagnostics…", "help/diagnostics"), k("About spicy", "help/about"))
+		open :: proc(path: string) {open_external(path)}
+		act(&items, "Keyboard shortcuts…", "help/shortcuts")
+		sep(&items)
+		act(&items, "Settings (settings.edn)", "help/settings")
+		other(&items, "Themes (themes.edn)", open, themes_file)
+		other(&items, "Shortcuts (shortcuts.edn)", open, shortcuts_file)
+		other(&items, "Symbols folder", open, user_symbols_dir())
+		act(&items, "Config folder", "help/config-folder")
+		sep(&items)
+		act(&items, "Diagnostics…", "help/diagnostics"); act(&items, "About spicy", "help/about")
 	}
 	return items[:]
 }
 
+// The items of a menu as the menu widget draws them.
+menu_items :: proc(name: string) -> []string {
+	entries := menu_entries(name)
+	items := make([]string, len(entries), context.temp_allocator)
+	for e, i in entries do items[i] = e.item
+	return items
+}
+
+// Does what item idx of a menu does (the submenu item picked, ui.sub_result, for a submenu).
 menu_pick :: proc(name: string, idx: int) {
-	items := menu_items(name)
-	if idx < 0 || idx >= len(items) do return
-	label, _ := menu_split(items[idx])
-	label = strings.trim_left(label, "✓ ~")
-	d := doc()
-	// submenus (View ▸ Theme, View ▸ UI scale)
-	if sub := ui.sub_result; sub >= 0 && (label == "Theme" || label == "UI scale") {
-		ui.sub_result = -1
-		if label == "Theme" {
-			if sub < len(themes) do pick_theme(themes[sub].name)
-		} else {
-			set_ui_scale(0 if sub == 0 else MENU_SCALES[sub - 1] if sub - 1 < len(MENU_SCALES) else S.scale)
-		}
-		return
-	}
+	entries := menu_entries(name)
+	if idx < 0 || idx >= len(entries) do return
+	e := entries[idx]
 	switch {
-	case strings.has_prefix(label, "Recent: "):
-		rec := pref_list("recent")
-		k := 0
-		for it, i in items {
-			if strings.has_prefix(it, "Recent: ") {
-				if i == idx do break
-				k += 1
-			}
+	case e.sub != nil:
+		if ui.sub_result >= 0 do e.sub(ui.sub_result)
+		ui.sub_result = -1
+	case e.pick != nil: e.pick(e.arg)
+	case len(e.action) > 0: run_action(e.action)
+	}
+}
+
+// For the test hook: picks the item of a menu by its label (without its marks and keys), and
+// for a submenu the item of the submenu.
+test_menu_pick :: proc(path: string) {
+	parts := strings.split(path, "/", context.temp_allocator)
+	if len(parts) < 2 do return
+	for it, i in menu_items(parts[0]) {
+		label, _ := menu_split(it)
+		if strings.trim_left(label, "✓ ~") != parts[1] do continue
+		if len(parts) > 2 {
+			for x, j in view_submenu(parts[1]) do if strings.trim_left(x, "✓ ") == parts[2] do ui.sub_result = j
+			if ui.sub_result < 0 do break
 		}
-		if k < len(rec) do open_file(rec[k])
-		return
-	case strings.has_prefix(label, "Simulator: "):
-		n := label[len("Simulator: "):]
-		for s in S.simulators do if s.name == n {
-			set_str(&d.sim_override, s.id)
-			status(tcat("simulator: ", s.name))
-		}
-		return
-	case label == "Add trace…":
-		dialog_trace(d, -1, -1)
-		return
-	case label == "Themes (themes.edn)":
-		open_external(themes_file)
-		return
-	case label == "Shortcuts (shortcuts.edn)":
-		open_external(shortcuts_file)
-		return
-	case label == "Symbols folder":
-		open_external(user_symbols_dir())
+		menu_pick(parts[0], i)
 		return
 	}
-	// match a label to its action
-	MAP := [?][2]string {
-		{"New", "file/new"}, {"Open…", "file/open"}, {"Save", "file/save"}, {"Save as…", "file/save-as"},
-		{"Export netlist…", "file/export-netlist"}, {"Export waveforms (CSV)…", "wave/export-csv"}, {"Close", "file/close"}, {"Quit", "file/quit"},
-		{"Undo", "edit/undo"}, {"Redo", "edit/redo"}, {"Cut", "edit/cut"}, {"Copy", "edit/copy"}, {"Paste", "edit/paste"},
-		{"Duplicate", "edit/duplicate"}, {"Delete", "edit/delete"}, {"Select all", "edit/select-all"}, {"Rotate", "edit/rotate"},
-		{"Mirror", "edit/mirror"}, {"Properties…", "edit/properties"},
-		{"Part…", "place/component"}, {"Wire", "place/wire"}, {"Ground", "place/ground"}, {"Net label…", "place/label"},
-		{"SPICE directive…", "place/directive"}, {"Comment…", "place/comment"}, {"New symbol…", "symbol/new"},
-		{"Fit to window", "view/fit"}, {"Zoom in", "view/zoom-in"}, {"Zoom out", "view/zoom-out"}, {"Waveforms", "view/toggle-waves"},
-		{"Move the waveforms", "view/next-layout"}, {"Netlist", "view/netlist"}, {"Simulator log", "view/log"}, {"Appearance (scale, text size)…", "view/appearance"},
-		{"Run", "sim/run"}, {"Stop", "sim/stop"}, {"Edit simulation command…", "sim/edit-command"}, {"Probe", "sim/probe"}, {"Simulators and their programs…", "sim/simulator"},
-		{"Fit", "view/fit"}, {"Previous zoom", "wave/zoom-back"}, {"Add plot pane", "wave/add-pane"}, {"Cursor 1", "wave/cursor1"},
-		{"Cursor 2", "wave/cursor2"}, {"Marker at the mouse", "wave/marker"}, {"Next analysis", "wave/next-plot"},
-		{"Remove all traces", "wave/clear"}, {"Export CSV…", "wave/export-csv"},
-		{"Waveforms in their own window", "wave/pop-out"}, {"In their own window", "wave/pop-out"}, {"Full screen", "view/full-screen"},
-		{"Import SPICE model…", "file/import-model"},
-		{"Keyboard shortcuts…", "help/shortcuts"}, {"Settings (settings.edn)", "help/settings"}, {"Config folder", "help/config-folder"},
-		{"Diagnostics…", "help/diagnostics"}, {"About spicy", "help/about"},
-	}
-	for m in MAP do if m[0] == label {
-		if name == "Waveforms" && m[1] == "view/fit" {
-			wave_fit(&d.wave)
-			return
-		}
-		run_action(m[1])
-		return
-	}
-	for s in symbols do if s.desc == label {
-		place_symbol(d, symbol_find(s.name))
-		return
-	}
+	log.warnf("test: no menu item %s", path)
 }
 
 draw_menubar :: proc(r: Rect) {
 	fill(r, th.bar)
 	line(r.x, r.y + r.h - 1, r.x + r.w, r.y + r.h - 1, th.border)
-	MENUS := [?]string{"File", "Edit", "Place", "View", "Simulate", "Waveforms", "Help"}
 	x := r.x + 4
 	for m in MENUS {
 		w := text_w(m) + 20
@@ -1220,6 +1238,8 @@ gui_main :: proc(files: []string) {
 						test_click = {f32(fx), f32(fy)}
 						test_click_frame = -1
 					}
+				case strings.has_prefix(a, "menu:"): // menu:View/UI scale/150 %: picks a menu item as a click does
+					test_menu_pick(a[5:])
 				case strings.has_prefix(a, "in-waves:"): // run inside the waveform window
 					for p in popouts do if p.kind == .Waves do p.test_action = strings.clone(a[9:])
 				case: run_action(a)

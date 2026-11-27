@@ -374,3 +374,29 @@ D1 2 1 DZ
 		testing.expect(t, d != nil && d.origin == .Builtin)
 	}
 }
+
+// Every item of the menu bar's menus does something: an action spicy has, its own proc, or a
+// submenu. A line is all a "-" item is.
+@(test)
+menus_do_something :: proc(t: ^testing.T) {
+	setup()
+	C.shortcuts_load()
+	C.app.docs = {}
+	append(&C.app.docs, C.doc_new())
+	C.app.cur = 0
+	known := make(map[string]bool, context.temp_allocator)
+	for a in C.actions do known[a.name] = true // ACTION_INFO's and a place/<symbol> for each symbol
+	for m in C.MENUS {
+		entries := C.menu_entries(m)
+		testing.expectf(t, len(entries) > 0, "menu %s is empty", m)
+		for e in entries {
+			n := int(len(e.action) > 0) + int(e.pick != nil) + int(e.sub != nil)
+			if e.item == "-" {
+				testing.expectf(t, n == 0, "%s: a line that does something", m)
+				continue
+			}
+			testing.expectf(t, n == 1, "%s › %q does %d things", m, e.item, n)
+			if len(e.action) > 0 do testing.expectf(t, known[e.action], "%s › %q runs %q, not an action", m, e.item, e.action)
+		}
+	}
+}

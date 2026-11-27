@@ -44,6 +44,14 @@ else
 fi
 run picker "place/component"
 shots="$shots picker"
+# menu items picked as a click picks them: an action, a submenu item (saved in settings.edn)
+run menus "menu:View/Move the waveforms;menu:View/UI scale/150 %"
+shots="$shots menus"
+if ! grep -qE ':scale +1\.5 ' "$work/cfg/settings.edn"; then
+	echo "FAIL: View › UI scale › 150 % did not set :ui :scale 1.5"
+	tail -20 "$work/log.txt"
+	exit 1
+fi
 
 for f in $shots; do
 	if [ ! -s "$work/$f.png" ]; then
