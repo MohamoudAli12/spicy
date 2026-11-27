@@ -352,7 +352,7 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 // The pins of a part that get a VACASK sense source (two-pin parts: the first pin).
 vacask_sensed :: proc(sym: ^Symbol, sim: ^Simulator_Def) -> int {
 	if !sim.sense_currents || sym.kind != .Part do return 0
-	if sym.probe == "none" || sym.probe == "source" do return 0
+	if sym.probe == .None || sym.probe == .Source do return 0
 	if len(sym.pins) == 2 do return 1
 	return len(sym.pins)
 }

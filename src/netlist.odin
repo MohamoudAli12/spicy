@@ -12,7 +12,6 @@ Netlist :: struct {
 	errors:   [dynamic]string,
 	warnings: [dynamic]string,
 	nets:     Net_Info,
-	dialect:  string,
 	base_dir: string, // folder of the schematic (relative .include paths)
 	local:    []Lib_Entry, // models and subcircuits the schematic defines itself
 	ngbehavior: string, // ngspice compatibility mode the netlist needs ("psa": PSpice models), or ""
@@ -33,7 +32,6 @@ netlist_build :: proc(s: ^Schematic, sim: ^Simulator_Def, title: string, base_di
 	nl.local = sch_models(s, sim, base_dir)
 	nl.errors = make([dynamic]string, context.temp_allocator)
 	nl.warnings = make([dynamic]string, context.temp_allocator)
-	nl.dialect = sim.dialect
 	nl.nets = nets_build(s, S.net_prefix)
 	for w in nl.nets.warnings do append(&nl.warnings, w)
 	nl.plot_traces = plot_requests(s, sim)
@@ -41,7 +39,7 @@ netlist_build :: proc(s: ^Schematic, sim: ^Simulator_Def, title: string, base_di
 	nl.meas_lines = card_lines(s, sim, ".meas")
 	meas_check(&nl, s)
 	step_check(&nl, sim, card_lines(s, sim, ".step"))
-	if sim.dialect == "vacask" {
+	if sim.dialect == .Vacask {
 		nl.text = netlist_vacask(&nl, s, sim, title)
 	} else {
 		nl.text = netlist_spice(&nl, s, sim, title)
@@ -73,7 +71,7 @@ directive_for :: proc(text: string, sim: ^Simulator_Def) -> (body: string, ok: b
 	nl := strings.index_byte(t, '\n')
 	tag := lower(strings.trim_space(t[1:nl] if nl >= 0 else t[1:]))
 	rest := t[nl + 1:] if nl >= 0 else ""
-	if tag == sim.id || tag == sim.dialect do return rest, true
+	if tag == sim.id || tag == DIALECT_NAMES[sim.dialect] do return rest, true
 	return "", false
 }
 
@@ -217,7 +215,7 @@ needed_models :: proc(s: ^Schematic, defined: map[string]bool, local: []Lib_Entr
 			append(&out, e)
 			continue
 		}
-		if S.default_models && (sym.editor == "model") {
+		if S.default_models && (sym.editor == .Model) {
 			for d in DEFAULT_MODEL_CARDS do if d[0] == name do append(&defs, d[1])
 		}
 	}
@@ -271,7 +269,7 @@ check_models :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def) {
 		if sym == nil || sym.kind != .Part do continue
 		// parts whose value is a model or subcircuit name
 		t := strings.trim_space(sym.spice)
-		uses_model := sym.editor == "model" || (len(t) > 0 && (t[0] == 'X' || t[0] == 'x'))
+		uses_model := sym.editor == .Model || (len(t) > 0 && (t[0] == 'X' || t[0] == 'x'))
 		if !uses_model do continue
 		f := strings.fields(c.value, context.temp_allocator)
 		if len(f) == 0 {
@@ -281,7 +279,7 @@ check_models :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def) {
 		name := lower(f[0])
 		if defined[name] || lib_find(name) != nil do continue
 		if card_names(split_lines(sym.defs), vacask = true)[name] || card_names(split_lines(sym.vacask.defs), vacask = true)[name] do continue
-		if S.default_models && sym.editor == "model" {
+		if S.default_models && sym.editor == .Model {
 			builtin := false
 			for d in DEFAULT_MODEL_CARDS do if d[0] == name do builtin = true
 			if builtin do continue

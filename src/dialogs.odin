@@ -140,7 +140,7 @@ dialog_part :: proc(d: ^Doc, ci: int) {
 		append(&dl.attr_keys, strings.clone(a.key))
 		append(&dl.attr_vals, strings.clone(a.val))
 	}
-	is_src := sym != nil && sym.editor == "source"
+	is_src := sym != nil && sym.editor == .Source
 	if is_src do source_parse(c.value)
 	dl.model_sel = -1
 	dialog_open(.Part_Edit)
@@ -632,7 +632,7 @@ draw_part_edit :: proc(d: ^Doc) {
 	}
 	c := &d.sch.comps[dl.idx]
 	sym := symbol_find(c.sym)
-	is_src := sym != nil && sym.editor == "source"
+	is_src := sym != nil && sym.editor == .Source
 	local := sch_models(&d.sch, doc_sim(d), dir_of(d.path))
 	// the value names a subcircuit: how its ports meet the symbol's pins
 	sub: ^Lib_Entry
@@ -665,7 +665,7 @@ draw_part_edit :: proc(d: ^Doc) {
 	label_col(&r, "Value")
 	vr := r
 	models: []string
-	if sym != nil && !is_src && (len(sym.models) > 0 || sym.editor == "model") do models = models_for_symbol(sym, local)
+	if sym != nil && !is_src && (len(sym.models) > 0 || sym.editor == .Model) do models = models_for_symbol(sym, local)
 	if sym != nil && !is_src && sym.kind == .Part {
 		if button("dlg.import", cut_right(&vr, text_w("Import…") + 24), "Import…") {
 			// a model file for this part: after the import the part uses it

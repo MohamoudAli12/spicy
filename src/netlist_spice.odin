@@ -145,7 +145,7 @@ spice_subckt_instance :: proc(nl: ^Netlist, b: ^strings.Builder, c: ^Comp, sym: 
 	}
 	inner := make([]string, len(nodes), context.temp_allocator)
 	copy(inner, nodes)
-	if sym.probe != "none" {
+	if sym.probe != .None {
 		used := make([]bool, len(nodes), context.temp_allocator)
 		for k in order do used[k] = true
 		for k in 0 ..< len(nodes) do if used[k] {

@@ -62,11 +62,11 @@ NONIDEAL_I := [?]Nonideal {
 nonideal_params :: proc(sym: ^Symbol) -> []Nonideal {
 	if sym == nil || sym.kind != .Part || len(sym.pins) != 2 do return nil
 	switch upper(sym.prefix) {
-	case "R": if sym.editor == "text" do return NONIDEAL_R[:]
-	case "C": if sym.editor == "text" do return NONIDEAL_C[:]
-	case "L": if sym.editor == "text" do return NONIDEAL_L[:]
-	case "V": if sym.editor == "source" do return NONIDEAL_V[:]
-	case "I": if sym.editor == "source" do return NONIDEAL_I[:]
+	case "R": if sym.editor == .Text do return NONIDEAL_R[:]
+	case "C": if sym.editor == .Text do return NONIDEAL_C[:]
+	case "L": if sym.editor == .Text do return NONIDEAL_L[:]
+	case "V": if sym.editor == .Source do return NONIDEAL_V[:]
+	case "I": if sym.editor == .Source do return NONIDEAL_I[:]
 	}
 	return nil
 }
@@ -103,7 +103,7 @@ nonideal_lines :: proc(nl: ^Netlist, c: ^Comp, sym: ^Symbol, nodes: []string, va
 	b := strings.builder_make(context.temp_allocator)
 	lref := lower(c.ref)
 	a, z := nodes[0], nodes[1]
-	is_src := sym.editor == "source"
+	is_src := sym.editor == .Source
 	// SPICE: the 0 V source that measures the current at the first pin (VACASK has one already;
 	// a V source is its own current)
 	if !vacask && !is_src {

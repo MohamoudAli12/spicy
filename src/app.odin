@@ -73,7 +73,7 @@ App :: struct {
 	cur:         int,
 	next_id:     int,
 	show_waves:  bool,
-	layout:      string,
+	layout:      Layout,
 	split:       f32,
 	split_drag:  bool,
 	hover_ctx:   Key_Ctx,
@@ -321,7 +321,7 @@ save_session :: proc() {
 	}
 	pref_put_bool("maximized", rl.IsWindowMaximized())
 	pref_put_bool("show-waves", app.show_waves)
-	pref_put("layout", app.layout)
+	pref_put("layout", LAYOUT_NAMES[app.layout])
 	pref_put_f64("split", f64(app.split))
 	prefs_save()
 }
@@ -360,7 +360,7 @@ on_run_done :: proc(d: ^Doc) {
 	status(r.message)
 	if len(r.measures) > 0 do status(strings.join(r.measures[:], "  ·  ", context.temp_allocator))
 	if len(r.warnings) > 0 do status(fmt.tprintf("%s – %d warning%s (View › Simulator log)", r.message, len(r.warnings), "" if len(r.warnings) == 1 else "s"))
-	if S.show_waves != "never" do app.show_waves = true
+	if S.show_waves != .Never do app.show_waves = true
 	// probe straight away, whatever tool was active (placing parts, drawing wires …),
 	// unless the user is in the middle of a drag or a dialog
 	if S.probe_after_run && d.tool != .Probe && d.drag.kind == .None && app.dlg.kind == .None {
@@ -461,10 +461,7 @@ run_action :: proc(name: string) {
 	case "view/full-screen":
 		toggle_fullscreen()
 	case "view/next-layout":
-		order := [4]string{"waves-top", "waves-right", "waves-bottom", "waves-left"}
-		k := 0
-		for o, i in order do if o == app.layout do k = i
-		app.layout = order[(k + 1) % 4]
+		app.layout = Layout((int(app.layout) + 1) % len(Layout))
 		app.show_waves = true
 	case "view/netlist":
 		show_netlist(d)
@@ -959,14 +956,13 @@ draw_main :: proc(r: Rect) {
 		return
 	}
 	d := doc()
-	has_waves := app.show_waves && S.show_waves != "never"
+	has_waves := app.show_waves && S.show_waves != .Never
 	popped := waves_popped_out(d)
-	if S.show_waves == "after-run" && len(d.run.plots) == 0 && len(d.wave.panes) <= 1 && wave_trace_count(&d.wave) == 0 do has_waves = has_waves && false
-	if S.show_waves == "always" do has_waves = app.show_waves
+	if S.show_waves == .After_Run && len(d.run.plots) == 0 && len(d.wave.panes) <= 1 && wave_trace_count(&d.wave) == 0 do has_waves = false
 	if popped do has_waves = false // they are in their own window
 	sr, wr := r, Rect{}
 	div: Rect
-	vert_layout := app.layout == "waves-left" || app.layout == "waves-right"
+	vert_layout := app.layout == .Waves_Left || app.layout == .Waves_Right
 	collapse_btn: Rect
 	collapse_hot: bool
 	collapse_glyph: Icon
@@ -974,20 +970,20 @@ draw_main :: proc(r: Rect) {
 	if !has_waves && !popped && !app.show_waves && len(d.run.plots) > 0 {
 		t := fs() + 8
 		strip: Rect
-		switch app.layout {
-		case "waves-bottom": strip = cut_bottom(&sr, t)
-		case "waves-left": strip = cut_left(&sr, t)
-		case "waves-right": strip = cut_right(&sr, t)
+		#partial switch app.layout {
+		case .Waves_Bottom: strip = cut_bottom(&sr, t)
+		case .Waves_Left: strip = cut_left(&sr, t)
+		case .Waves_Right: strip = cut_right(&sr, t)
 		case: strip = cut_top(&sr, t)
 		}
 		hv := hover(strip)
 		fill(strip, th.hover if hv else th.bar)
 		stroke(strip, th.border)
 		icon: Icon
-		switch app.layout {
-		case "waves-bottom": icon = .Up
-		case "waves-left": icon = .Right
-		case "waves-right": icon = .Left
+		#partial switch app.layout {
+		case .Waves_Bottom: icon = .Up
+		case .Waves_Left: icon = .Right
+		case .Waves_Right: icon = .Left
 		case: icon = .Down
 		}
 		if vert_layout do draw_icon(icon, strip.x + strip.w / 2, strip.y + strip.h / 2, fs(0.7), th.muted)
@@ -1008,18 +1004,18 @@ draw_main :: proc(r: Rect) {
 	}
 	if has_waves {
 		k := app.split
-		switch app.layout {
-		case "waves-bottom":
+		#partial switch app.layout {
+		case .Waves_Bottom:
 			h := r.h * k
 			sr = {r.x, r.y, r.w, r.h - h - 4}
 			div = {r.x, sr.y + sr.h, r.w, 4}
 			wr = {r.x, div.y + 4, r.w, h}
-		case "waves-left":
+		case .Waves_Left:
 			w := r.w * k
 			wr = {r.x, r.y, w, r.h}
 			div = {r.x + w, r.y, 4, r.h}
 			sr = {div.x + 4, r.y, r.w - w - 4, r.h}
-		case "waves-right":
+		case .Waves_Right:
 			w := r.w * k
 			sr = {r.x, r.y, r.w - w - 4, r.h}
 			div = {sr.x + sr.w, r.y, 4, r.h}
@@ -1043,10 +1039,10 @@ draw_main :: proc(r: Rect) {
 			chv := hover(cb)
 			collapse_btn, collapse_hot = cb, chv
 			glyph: Icon
-			switch app.layout {
-			case "waves-bottom": glyph = .Down
-			case "waves-left": glyph = .Left
-			case "waves-right": glyph = .Right
+			#partial switch app.layout {
+			case .Waves_Bottom: glyph = .Down
+			case .Waves_Left: glyph = .Left
+			case .Waves_Right: glyph = .Right
 			case: glyph = .Up
 			}
 			collapse_glyph = glyph
@@ -1065,10 +1061,10 @@ draw_main :: proc(r: Rect) {
 		}
 		if app.split_drag {
 			ui.cursor = .RESIZE_EW if vertical else .RESIZE_NS
-			switch app.layout {
-			case "waves-bottom": app.split = (r.y + r.h - ui.mouse.y) / r.h
-			case "waves-left": app.split = (ui.mouse.x - r.x) / r.w
-			case "waves-right": app.split = (r.x + r.w - ui.mouse.x) / r.w
+			#partial switch app.layout {
+			case .Waves_Bottom: app.split = (r.y + r.h - ui.mouse.y) / r.h
+			case .Waves_Left: app.split = (ui.mouse.x - r.x) / r.w
+			case .Waves_Right: app.split = (r.x + r.w - ui.mouse.x) / r.w
 			case: app.split = (ui.mouse.y - r.y) / r.h
 			}
 			app.split = clampf32(app.split, 0.12, 0.88)
@@ -1156,8 +1152,9 @@ gui_main :: proc(files: []string) {
 	fonts_init()
 	app.show_waves = pref_bool("show-waves", true)
 	// a copy: the prefs and settings strings are freed when they change
-	app.layout = strings.clone(pref_get("layout", S.layout))
-	if len(S.layout) > 0 && S.layout != "waves-top" do app.layout = strings.clone(S.layout)
+	// the last layout used, unless settings.edn names another than the default
+	app.layout, _ = enum_from_name(LAYOUT_NAMES, pref_get("layout", LAYOUT_NAMES[S.layout]))
+	if S.layout != .Waves_Top do app.layout = S.layout
 	app.split = f32(pref_f64("split", f64(S.split)))
 	opened := false
 	for f in files {

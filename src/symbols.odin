@@ -42,7 +42,8 @@ Vacask_Def :: struct {
 }
 
 Symbol :: struct {
-	name, desc, category, prefix, key, value, editor: string,
+	name, desc, category, prefix, key, value: string,
+	editor:   Value_Editor,
 	models:   []string,
 	kind:     Sym_Kind,
 	pins:     []Pin_Def,
@@ -51,7 +52,7 @@ Symbol :: struct {
 	defs:     string,
 	vacask:   Vacask_Def,
 	cur:      string,
-	probe:    string, // "device" | "source" | "none"
+	probe:    Probe,
 	ref_at:   [2]f32,
 	value_at: [2]f32,
 	has_ref_at, has_value_at: bool,
@@ -60,6 +61,22 @@ Symbol :: struct {
 	edn:      string, // the symbol's map as written (copied into schematics that use it)
 	like:     string, // :like
 }
+
+// How the part dialog edits a part's value (:editor).
+Value_Editor :: enum u8 {
+	Text, // a line of text
+	Model, // a model name, chosen from the library
+	Source, // a voltage or current source: DC, a waveform, AC
+}
+VALUE_EDITOR_NAMES := [Value_Editor]string{.Text = "text", .Model = "model", .Source = "source"}
+
+// What a part's current probe measures (:probe).
+Probe :: enum u8 {
+	Device, // the current into each pin (a sense source in series when the simulator has no pin currents)
+	Source, // the part is a source: its own current
+	None, // no current (a ground, a label …)
+}
+PROBE_NAMES := [Probe]string{.Device = "device", .Source = "source", .None = "none"}
 
 symbols: [dynamic]Symbol
 symbols_gen: int // bumped whenever symbols change (the parts picker rebuilds its list then)
@@ -201,11 +218,20 @@ symbol_from_edn :: proc(m: Edn, src, ctx_in: string) -> (s: Symbol, ok: bool) {
 	s.prefix = str(m, "prefix", "X", s.prefix, base)
 	s.key = strings.clone(edn_str(m, "key"))
 	s.value = str(m, "value", "", s.value, base)
-	s.editor = str(m, "editor", "text", s.editor, base)
+	keyword :: proc(m: Edn, k: string, names: [$E]string, base_val: E, ctx: string) -> E {
+		v, has := edn_get(m, k)
+		if !has do return base_val
+		if e, ok := enum_from_name(names, v.s); ok && (v.kind == .Keyword || v.kind == .String) do return e
+		choices := make([dynamic]string, context.temp_allocator)
+		for n in names do append(&choices, tcat(":", n))
+		config_error(fmt.tprintf("%s: :%s %s is not one of %s", ctx, k, edn_to_string(v), strings.join(choices[:], " ", context.temp_allocator)))
+		return base_val
+	}
+	s.editor = keyword(m, "editor", VALUE_EDITOR_NAMES, s.editor, ctx)
 	s.spice = str(m, "spice", "", s.spice, base)
 	s.defs = str(m, "defs", "", s.defs, base)
 	s.cur = str(m, "cur", "", s.cur, base)
-	s.probe = str(m, "probe", "device", s.probe, base)
+	s.probe = keyword(m, "probe", PROBE_NAMES, s.probe, ctx)
 	if base == nil || edn_has(m, "kind") {
 		switch edn_str(m, "kind", "part") {
 		case "ground": s.kind = .Ground
@@ -375,7 +401,7 @@ symbol_to_edn :: proc(s: ^Symbol) -> string {
 	q(&b, "prefix", s.prefix)
 	if len(s.key) > 0 do q(&b, "key", s.key)
 	q(&b, "value", s.value, true)
-	if len(s.editor) > 0 && s.editor != "text" do fmt.sbprintf(&b, " :editor :%s", s.editor)
+	if s.editor != .Text do fmt.sbprintf(&b, " :editor :%s", VALUE_EDITOR_NAMES[s.editor])
 	switch s.kind {
 	case .Ground: strings.write_string(&b, " :kind :ground")
 	case .Label: strings.write_string(&b, " :kind :label")
@@ -390,7 +416,7 @@ symbol_to_edn :: proc(s: ^Symbol) -> string {
 		strings.write_string(&b, "]")
 	}
 	q(&b, "cur", s.cur)
-	if len(s.probe) > 0 && s.probe != "device" do fmt.sbprintf(&b, " :probe :%s", s.probe)
+	if s.probe != .Device do fmt.sbprintf(&b, " :probe :%s", PROBE_NAMES[s.probe])
 	strings.write_string(&b, "\n  :pins [")
 	for p, i in s.pins {
 		if i > 0 do strings.write_string(&b, " ")

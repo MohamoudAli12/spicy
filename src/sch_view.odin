@@ -1232,7 +1232,7 @@ sch_reselect_last :: proc(d: ^Doc, nc, nf, nt: int) {
 probe_comp :: proc(d: ^Doc, ci, pin: int, power, new_pane: bool) {
 	c := &d.sch.comps[ci]
 	sym := symbol_find(c.sym)
-	if sym == nil || sym.probe == "none" {
+	if sym == nil || sym.probe == .None {
 		status(tcat(c.ref, ": no current to probe for this part"), true)
 		return
 	}

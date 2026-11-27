@@ -75,6 +75,9 @@ check "set program kept"     cat "$work/pcfg/settings.edn" "; mine"
 check "set program config"   env SPICY_CONFIG_DIR="$work/pcfg" "$bin" --check-config "no problems"
 env "${noconv[@]}" SPICY_CONFIG_DIR="$work/pcfg" "$bin" --set-program vacask /opt/y/vacask >/dev/null
 check "set program again"    cat "$work/pcfg/settings.edn" '["/opt/y/vacask" "-qp" "{netlist}"]'
+mkdir -p "$work/bcfg"
+echo '{:ui {:layout :waves-sideways}}' >"$work/bcfg/settings.edn"
+check "config bad keyword"   env SPICY_CONFIG_DIR="$work/bcfg" "$bin" --check-config ":ui :layout :waves-sideways is not one of :waves-top"
 
 # SPICE netlist opened as a schematic
 cat >"$work/buck.cir" <<'EOF'

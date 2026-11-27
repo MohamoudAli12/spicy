@@ -119,7 +119,7 @@ pin_clone :: proc(p: Pin_Def) -> Pin_Def {
 sym_fields_clone :: proc(s: Symbol) -> Symbol {
 	r := s
 	r.name, r.desc, r.category, r.prefix, r.key = cl(s.name), cl(s.desc), cl(s.category), cl(s.prefix), cl(s.key)
-	r.value, r.editor, r.spice, r.defs, r.cur, r.probe = cl(s.value), cl(s.editor), cl(s.spice), cl(s.defs), cl(s.cur), cl(s.probe)
+	r.value, r.spice, r.defs, r.cur = cl(s.value), cl(s.spice), cl(s.defs), cl(s.cur)
 	r.source, r.edn, r.like = cl(s.source), "", ""
 	r.models = cl_list(s.models)
 	r.vacask = {line = cl(s.vacask.line), defs = cl(s.vacask.defs), loads = cl_list(s.vacask.loads), models = cl_list(s.vacask.models)}
@@ -221,7 +221,7 @@ symed_open :: proc(src: ^Symbol, d: ^Doc = nil, ci := -1) {
 		// back into the file it came from; built-in symbols are replaced from my-symbols.edn
 		if strings.has_suffix(lower(src.source), ".edn") && file_exists(src.source) do symed.file = cl(src.source)
 	} else {
-		symed.sym = Symbol{name = cl("new_symbol"), desc = cl("New symbol"), category = cl("My symbols"), prefix = cl("X"), editor = cl("text"), probe = cl("device"), kind = .Part}
+		symed.sym = Symbol{name = cl("new_symbol"), desc = cl("New symbol"), category = cl("My symbols"), prefix = cl("X"), kind = .Part}
 		symed.spice_auto = true
 		symed.ref_auto, symed.value_auto = true, true
 		append(&symed.gfx, Gfx{kind = .Rect, pts = make([][2]f32, 2, alloc()), fill = .Body})
@@ -1160,10 +1160,10 @@ use_template :: proc(t: ^Symbol) {
 		symed.sym.spice = cl(t.spice)
 		symed.sym.defs = cl(t.defs)
 		symed.sym.vacask = {line = cl(t.vacask.line), defs = cl(t.vacask.defs), loads = cl_list(t.vacask.loads), models = cl_list(t.vacask.models)}
-		symed.sym.editor = cl(t.editor)
+		symed.sym.editor = t.editor
 		symed.sym.models = cl_list(t.models)
 		symed.sym.cur = cl(t.cur)
-		symed.sym.probe = cl(t.probe)
+		symed.sym.probe = t.probe
 		if len(symed.sym.value) == 0 do symed.sym.value = cl(t.value)
 		if len(symed.sym.prefix) == 0 || symed.sym.prefix == "X" do symed.sym.prefix = cl(t.prefix)
 	}

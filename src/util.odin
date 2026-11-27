@@ -142,6 +142,12 @@ is_identifier :: proc(t: string) -> bool {
 	return true
 }
 
+// The value of an enum whose name (in names) is s.
+enum_from_name :: proc(names: [$E]string, s: string) -> (E, bool) {
+	for n, e in names do if n == s do return e, true
+	return {}, false
+}
+
 // Appends x unless the list has it already.
 add_unique :: proc(list: ^[dynamic]string, x: string) {
 	for y in list do if y == x do return

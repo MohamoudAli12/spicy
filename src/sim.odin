@@ -26,8 +26,8 @@ Run :: struct {
 	state:      Run_State,
 	sim_id:     string,
 	sim_name:   string,
-	dialect:    string,
-	per_analysis: bool, // the simulator writes one raw file per analysis into its run folder
+	dialect:    Dialect,
+	raw_files:  Raw_Files,
 	dir:        string,
 	netlist:    string, // path of the current step
 	raw:        string,
@@ -54,7 +54,7 @@ Run :: struct {
 run_free :: proc(r: ^Run) {
 	for &p in r.plots do plot_free(&p)
 	delete(r.plots)
-	delete(r.sim_id); delete(r.sim_name); delete(r.dialect); delete(r.dir); delete(r.netlist)
+	delete(r.sim_id); delete(r.sim_name); delete(r.dir); delete(r.netlist)
 	delete(r.raw); delete(r.log_path); delete(r.out_path); delete(r.message)
 	delete(r.log_text); delete(r.net_text)
 	for w in r.warnings do delete(w)
@@ -79,19 +79,19 @@ run_free :: proc(r: ^Run) {
 }
 
 // Folder for the files of a run.
-run_dir_for :: proc(doc_path: string, doc_id: int, dialect: string) -> (dir, stem: string) {
+run_dir_for :: proc(doc_path: string, doc_id: int, dialect: Dialect) -> (dir, stem: string) {
 	stem = stem_name(doc_path) if len(doc_path) > 0 else fmt.tprintf("untitled-%d", doc_id)
-	switch S.output_dir {
-	case "beside-schematic", "":
+	switch S.output_place {
+	case .Beside_Schematic:
 		if len(doc_path) > 0 {
 			dir = dir_name(abs_path(doc_path))
-			if dialect == "vacask" do dir = path_join(dir, tcat(stem, ".vacask"))
+			if dialect == .Vacask do dir = path_join(dir, tcat(stem, ".vacask"))
 			return
 		}
 		dir = path_join(state_dir(), "runs", stem)
-	case "state-folder":
+	case .State_Folder:
 		dir = path_join(state_dir(), "runs", stem)
-	case:
+	case .Folder:
 		dir = path_join(S.output_dir, stem)
 	}
 	return
@@ -102,13 +102,12 @@ run_start :: proc(r: ^Run, sch: ^Schematic, doc_path: string, doc_id: int, sim: 
 	run_free(r)
 	r.sim_id = strings.clone(sim.id)
 	r.sim_name = strings.clone(sim.name)
-	r.dialect = strings.clone(sim.dialect)
-	r.per_analysis = sim.raw == "per-analysis"
+	r.dialect, r.raw_files = sim.dialect, sim.raw
 	r.op = make(map[string]f64)
 	dir, stem := run_dir_for(doc_path, doc_id, sim.dialect)
 	r.dir = strings.clone(dir)
 	os.make_directory_all(dir)
-	ext := "sim" if sim.dialect == "vacask" else "net"
+	ext := "sim" if sim.dialect == .Vacask else "net"
 	r.netlist = strings.clone(path_join(dir, tcat(stem, ".", ext)))
 	r.raw = strings.clone(path_join(dir, tcat(stem, ".raw")))
 	r.log_path = strings.clone(path_join(dir, tcat(stem, ".log")))
@@ -116,7 +115,7 @@ run_start :: proc(r: ^Run, sch: ^Schematic, doc_path: string, doc_id: int, sim: 
 
 	title := doc_path if len(doc_path) > 0 else stem
 	nl := netlist_build(sch, sim, tcat("spicy: ", base_name(title)), dir_of(abs_path(doc_path)) if len(doc_path) > 0 else "")
-	if len(nl.xyce_print) > 0 && sim.raw != "per-analysis" {
+	if len(nl.xyce_print) > 0 && sim.raw != .Per_Analysis {
 		// the results from a .print line (it has the device currents), not from -r (below)
 		cut := strings.last_index(nl.text, ".end")
 		if cut >= 0 do nl.text = tcat(nl.text[:cut], fmt.tprintf(".print %s format=raw file=%s %s\n", nl.xyce_print, base_name(r.raw), nl.xyce_vars), nl.text[cut:])
@@ -131,7 +130,7 @@ run_start :: proc(r: ^Run, sch: ^Schematic, doc_path: string, doc_id: int, sim: 
 		return
 	}
 	// old results must not be mistaken for new ones
-	if sim.raw == "per-analysis" {
+	if sim.raw == .Per_Analysis {
 		_, files := list_dir(dir, {"raw"})
 		for f in files do os.remove(path_join(dir, f))
 	}
@@ -143,10 +142,10 @@ run_start :: proc(r: ^Run, sch: ^Schematic, doc_path: string, doc_id: int, sim: 
 		step_stem := stem
 		if len(nl.steps) > 0 {
 			label = nl.steps[k].label
-			text = step_netlist(nl.text, nl.steps[k].assign, sim.dialect == "vacask")
+			text = step_netlist(nl.text, nl.steps[k].assign, sim.dialect == .Vacask)
 			step_stem = tcat(stem, ".step", itoa(k + 1))
 			// Xyce's .print line names the raw file: this step's own
-			if len(nl.xyce_print) > 0 && sim.raw != "per-analysis" {
+			if len(nl.xyce_print) > 0 && sim.raw != .Per_Analysis {
 				text, _ = strings.replace_all(text, tcat("file=", base_name(r.raw)), tcat("file=", step_stem, ".raw"), context.temp_allocator)
 			}
 		}
@@ -179,7 +178,7 @@ run_start :: proc(r: ^Run, sch: ^Schematic, doc_path: string, doc_id: int, sim: 
 		}
 		// Xyce with a .print … format=raw line, or a noise-only netlist (its noise is in the
 		// _noise.dat file, and -r would only add the transfer function): no -r
-		if (len(nl.xyce_print) > 0 || nl.xyce_noise_only) && sim.raw != "per-analysis" {
+		if (len(nl.xyce_print) > 0 || nl.xyce_noise_only) && sim.raw != .Per_Analysis {
 			for i := 1; i + 1 < len(cmd); i += 1 do if cmd[i] == "-r" && cmd[i + 1] == st.raw {
 				remove_range(&cmd, i, i + 2)
 				break
@@ -275,7 +274,7 @@ run_poll :: proc(r: ^Run) -> bool {
 	files := make([dynamic]string, context.temp_allocator)
 	// only this run's files: a single-raw simulator runs in the schematic's folder, where the
 	// raw files of other schematics may lie
-	if r.per_analysis {
+	if r.raw_files == .Per_Analysis {
 		_, fs := list_dir(r.dir, {"raw"})
 		for f in fs do append(&files, path_join(r.dir, f))
 	} else if file_exists(r.raw) {
@@ -288,7 +287,7 @@ run_poll :: proc(r: ^Run) -> bool {
 		if len(perr) > 0 do append(&errs, perr)
 		for &p in plots {
 			// VACASK's DC sweep (spicy's "analysis dcN op" in a sweep) is named "Operating Point"
-			if r.dialect == "vacask" && strings.has_prefix(base_name(f), "dc") && p.npoints > 1 && strings.contains(lower(p.name), "operating") {
+			if r.dialect == .Vacask && strings.has_prefix(base_name(f), "dc") && p.npoints > 1 && strings.contains(lower(p.name), "operating") {
 				delete(p.name)
 				p.name = strings.clone("DC transfer characteristic")
 			}
@@ -303,7 +302,7 @@ run_poll :: proc(r: ^Run) -> bool {
 		if len(nerr) > 0 do append(&errs, nerr)
 		else do append(&r.plots, np)
 	}
-	if r.dialect == "vacask" {
+	if r.dialect == .Vacask {
 		for &p in r.plots[before:] do vacask_noise_density(&p)
 	}
 	for &p in r.plots[before:] do noise_units(&p)

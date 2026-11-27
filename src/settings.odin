@@ -12,11 +12,31 @@ import "core:time"
 
 DEFAULT_SETTINGS :: #load("../config/settings.edn", string)
 
+// The netlist language a simulator reads.
+Dialect :: enum u8 {Spice, Vacask}
+DIALECT_NAMES := [Dialect]string{.Spice = "spice", .Vacask = "vacask"}
+
+// Where a simulator writes its results: one raw file ({raw}), or one per analysis in the run folder.
+Raw_Files :: enum u8 {Single, Per_Analysis}
+RAW_FILES_NAMES := [Raw_Files]string{.Single = "single", .Per_Analysis = "per-analysis"}
+
+// Where the waveforms are, next to the schematic. View › Move the waveforms goes round in this order.
+Layout :: enum u8 {Waves_Top, Waves_Right, Waves_Bottom, Waves_Left}
+LAYOUT_NAMES := [Layout]string{.Waves_Top = "waves-top", .Waves_Right = "waves-right", .Waves_Bottom = "waves-bottom", .Waves_Left = "waves-left"}
+
+// When the waveform area shows: always, after a run (when there is something to show), never.
+Show_Waves :: enum u8 {After_Run, Always, Never}
+SHOW_WAVES_NAMES := [Show_Waves]string{.After_Run = "after-run", .Always = "always", .Never = "never"}
+
+// Where a run's files go: beside the schematic, in the state folder, or a folder of its own
+// (Settings.output_dir).
+Output_Place :: enum u8 {Beside_Schematic, State_Folder, Folder}
+
 Simulator_Def :: struct {
 	id:             string, // "ngspice"
 	name:           string,
-	dialect:        string, // "spice" | "vacask"
-	raw:            string, // "single" | "per-analysis"
+	dialect:        Dialect,
+	raw:            Raw_Files,
 	sense_currents: bool,
 	command:        []string,
 	lines:          []string,
@@ -32,9 +52,9 @@ Settings :: struct {
 	scale:            f32, // 0 = automatic
 	font, mono_font:  string,
 	font_size:        f32,
-	layout:           string,
+	layout:           Layout,
 	split:            f32,
-	show_waves:       string,
+	show_waves:       Show_Waves,
 	toolbar:          bool,
 	statusbar:        bool,
 	antialias:        bool,
@@ -103,7 +123,8 @@ Settings :: struct {
 	w_fft_all:        bool, // FFT of the whole run, not the time range shown
 	// simulation
 	simulator:        string,
-	output_dir:       string,
+	output_place:     Output_Place,
+	output_dir:       string, // the folder, for output_place .Folder
 	probe_after_run:  bool,
 	run_on_save:      bool,
 	default_models:   bool,
@@ -155,6 +176,22 @@ cfg_b :: proc(path: ..string) -> bool {
 	if v.kind == .Nil do return false
 	d := defaults_value(..path)
 	return d.kind == .Bool && d.b
+}
+
+// A keyword setting that is one of an enum's names; fallback when it is not set. A value
+// that is none of them is reported, and the default settings' value is used.
+cfg_enum :: proc(names: [$E]string, fallback: E, path: ..string) -> E {
+	v := cfg(..path)
+	if v.kind == .Nil do return fallback
+	if v.kind == .String || v.kind == .Keyword || v.kind == .Symbol {
+		if e, ok := enum_from_name(names, v.s); ok do return e
+	}
+	choices := make([dynamic]string, context.temp_allocator)
+	for n in names do append(&choices, tcat(":", n))
+	config_error(fmt.tprintf("settings.edn: :%s %s is not one of %s", strings.join(path, " :", context.temp_allocator), edn_to_string(v, context.temp_allocator), strings.join(choices[:], " ", context.temp_allocator)))
+	d := defaults_value(..path)
+	if e, ok := enum_from_name(names, d.s); ok do return e
+	return fallback
 }
 
 // Strings and keywords both read as text (without the colon).
@@ -246,9 +283,9 @@ settings_apply :: proc() {
 	s.font = cfg_s("ui", "font")
 	s.mono_font = cfg_s("ui", "mono-font")
 	s.font_size = f32(clampf(cfg_f("ui", "font-size"), 8, 40))
-	s.layout = cfg_s("ui", "layout")
+	s.layout = cfg_enum(LAYOUT_NAMES, Layout.Waves_Top, "ui", "layout")
 	s.split = f32(clampf(cfg_f("ui", "split"), 0.1, 0.9))
-	s.show_waves = cfg_s("ui", "show-waves")
+	s.show_waves = cfg_enum(SHOW_WAVES_NAMES, Show_Waves.After_Run, "ui", "show-waves")
 	s.toolbar = cfg_b("ui", "toolbar")
 	s.statusbar = cfg_b("ui", "statusbar")
 	s.antialias = cfg_b("ui", "antialias")
@@ -334,7 +371,14 @@ settings_apply :: proc() {
 	}
 
 	s.simulator = cfg_s("simulation", "simulator")
-	s.output_dir = cfg_s("simulation", "output-dir")
+	{
+		place := cfg_s("simulation", "output-dir")
+		switch place {
+		case "beside-schematic", "": s.output_place = .Beside_Schematic; delete(place)
+		case "state-folder": s.output_place = .State_Folder; delete(place)
+		case: s.output_place, s.output_dir = .Folder, place
+		}
+	}
 	s.probe_after_run = cfg_b("simulation", "probe-after-run")
 	s.run_on_save = cfg_b("simulation", "run-on-save")
 	s.default_models = cfg_b("simulation", "default-models")
@@ -354,10 +398,8 @@ settings_apply :: proc() {
 			sd := Simulator_Def{id = strings.clone(id)}
 			sd.name = cfg_s("simulators", id, "name")
 			if len(sd.name) == 0 do sd.name = sd.id
-			sd.dialect = cfg_s("simulators", id, "dialect")
-			if sd.dialect != "vacask" do sd.dialect = "spice"
-			sd.raw = cfg_s("simulators", id, "raw")
-			if sd.raw != "per-analysis" do sd.raw = "single"
+			sd.dialect = cfg_enum(DIALECT_NAMES, Dialect.Spice, "simulators", id, "dialect")
+			sd.raw = cfg_enum(RAW_FILES_NAMES, Raw_Files.Single, "simulators", id, "raw")
 			sd.sense_currents = cfg_b("simulators", id, "sense-currents")
 			sd.command = cfg_list("simulators", id, "command")
 			sd.lines = cfg_list("simulators", id, "lines")

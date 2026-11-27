@@ -544,12 +544,12 @@ current_vector_names :: proc(sim: ^Simulator_Def, c: ^Comp, sym: ^Symbol, tag: s
 	}
 	// a part with non-ideal values: the 0 V source at its first pin (SPICE; VACASK's
 	// sense source has the same name)
-	if len(tag) == 0 && sym.probe != "source" && len(sym.pins) > 0 && nonideal_active(c, sym) {
+	if len(tag) == 0 && sym.probe != .Source && len(sym.pins) > 0 && nonideal_active(c, sym) {
 		sn := sense_source(ref, sym.pins[0].name)
 		append(&out, tcat("i(", sn, ")"), tcat(sn, "#branch"))
 	}
 	if len(tag) == 0 {
-		if sym.probe == "source" {
+		if sym.probe == .Source {
 			append(&out, probe_name(sim.source_current, ref, ref, "", ""), probe_name(sim.source_current, lref, lref, "", ""))
 		} else {
 			pin := sanitize(sym.pins[0].name) if len(sym.pins) > 0 else ""
