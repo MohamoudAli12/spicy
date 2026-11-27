@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.png" alt="spicy logo: a dried red chilli" width="160"></p>
+
 # spicy
 
 A fast, single-binary schematic editor and waveform viewer for **ngspice**, **Xyce** and **VACASK**.

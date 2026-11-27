@@ -88,10 +88,11 @@ jobs:
         run: odin build src -out:spicy -o:speed -define:SPICY_VERSION="v$VERSION"
 
       # a GUI program: Windows opens no console window for it (it borrows the terminal it
-      # is started from, see src/win_console_windows.odin)
+      # is started from, see src/win_console_windows.odin). The resource gives spicy.exe
+      # its icon in Explorer (assets/spicy.rc -> assets/spicy.ico, compiled with rc.exe).
       - name: Build (Windows)
         if: runner.os == 'Windows'
-        run: odin build src -out:spicy.exe -o:speed -subsystem:windows -define:SPICY_VERSION="v$VERSION"
+        run: odin build src -out:spicy.exe -o:speed -subsystem:windows -resource:assets/spicy.rc -define:SPICY_VERSION="v$VERSION"
 
       - name: Build (macOS universal)
         if: runner.os == 'macOS'

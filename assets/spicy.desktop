@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=spicy
+GenericName=Circuit Simulator
+Comment=Schematic editor and waveform viewer for ngspice, Xyce and VACASK
+Exec=spicy %F
+Icon=spicy
+Terminal=false
+Categories=Development;Electronics;Engineering;
+StartupWMClass=spicy

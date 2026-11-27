@@ -1,0 +1,3 @@
+// Windows resources: the program icon. GLFW_ICON is the name GLFW looks up
+// for the window and taskbar; Explorer shows the same icon for spicy.exe.
+GLFW_ICON ICON "spicy.ico"

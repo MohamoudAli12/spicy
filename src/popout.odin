@@ -233,6 +233,7 @@ popout_ctx: runtime.Context // for the callbacks that allocate
 // Remembers the main window (call right after InitWindow).
 popouts_init :: proc() {
 	main_win = glfwGetCurrentContext()
+	app_icon_apply(main_win)
 	popout_ctx = context
 }
 
@@ -379,6 +380,7 @@ popout_create :: proc(kind: Popout_Kind, doc_id: int, geo_pref: string, dw, dh, 
 	glfwMakeContextCurrent(main_win)
 	append(&popouts, p)
 	titlebar_apply_glfw(win) // Windows: the theme's title bar before it is shown
+	app_icon_apply(win)
 	glfwShowWindow(win)
 	glfwFocusWindow(win)
 	return p
