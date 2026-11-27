@@ -132,7 +132,11 @@ asc_import :: proc(data: []u8) -> (s: Schematic, warnings: [dynamic]string, err:
 		if len(c.ref) == 0 do c.ref = strings.clone(next_ref(&s, sym.prefix))
 		if len(c.value) == 0 do c.value = strings.clone(sym.value)
 	}
-	for k, n in skipped do append(&warnings, fmt.tprintf("left out %d × symbol \"%s\" (not in spicy's library)", n, k))
+	// in name order: the same file always gives the same warnings
+	names := make([dynamic]string, context.temp_allocator)
+	for k in skipped do append(&names, k)
+	sort_strings(names[:])
+	for k in names do append(&warnings, fmt.tprintf("left out %d × symbol \"%s\" (not in spicy's library)", skipped[k], k))
 	wires_cleanup(&s)
 	return s, warnings, ""
 }

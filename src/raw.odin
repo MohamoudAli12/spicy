@@ -96,7 +96,6 @@ raw_parse :: proc(data: []u8, path: string) -> (plots: [dynamic]Plot, err: strin
 		nvars, npoints := 0, 0
 		binary := false
 		header_ok := false
-		real_double := true
 		names := make([dynamic][2]string, context.temp_allocator)
 		// header lines
 		for pos < len(data) {
@@ -113,7 +112,6 @@ raw_parse :: proc(data: []u8, path: string) -> (plots: [dynamic]Plot, err: strin
 			case "flags":
 				fl := lower(val)
 				p.complex = strings.contains(fl, "complex")
-				_ = real_double
 			case "no. variables": nvars, _ = strconv.parse_int(val)
 			case "no. points": npoints, _ = strconv.parse_int(val)
 			case "variables":

@@ -213,12 +213,12 @@ symbol_from_edn :: proc(m: Edn, src, ctx_in: string) -> (s: Symbol, ok: bool) {
 		case: s.kind = .Part
 		}
 	}
-	if mv, ok := edn_get(m, "models"); ok && edn_is_coll(mv) {
+	if mv, has := edn_get(m, "models"); has && edn_is_coll(mv) {
 		ms := make([dynamic]string)
 		for x in mv.items do append(&ms, strings.clone(x.s))
 		s.models = ms[:]
 	}
-	if vv, ok := edn_get(m, "vacask"); ok && vv.kind == .Map {
+	if vv, has := edn_get(m, "vacask"); has && vv.kind == .Map {
 		s.vacask.line = strings.clone(edn_str(vv, "line"))
 		s.vacask.defs = strings.clone(edn_str(vv, "defs"))
 		strs :: proc(m: Edn, k: string) -> []string {
@@ -242,7 +242,7 @@ symbol_from_edn :: proc(m: Edn, src, ctx_in: string) -> (s: Symbol, ok: bool) {
 	// pins
 	pins := make([dynamic]Pin_Def)
 	if base != nil && !edn_has(m, "pins") do append(&pins, ..base.pins)
-	if pv, ok := edn_get(m, "pins"); ok && edn_is_coll(pv) {
+	if pv, has := edn_get(m, "pins"); has && edn_is_coll(pv) {
 		for p in pv.items {
 			pd := Pin_Def{name = strings.clone(edn_str(p, "name")), cur = strings.clone(edn_str(p, "cur")), element = strings.clone(edn_str(p, "element"))}
 			a, aok := at(p, "at")
@@ -262,7 +262,7 @@ symbol_from_edn :: proc(m: Edn, src, ctx_in: string) -> (s: Symbol, ok: bool) {
 	// graphics
 	gfx := make([dynamic]Gfx)
 	if base != nil && !edn_has(m, "graphics") do append(&gfx, ..base.gfx)
-	if gv, ok := edn_get(m, "graphics"); ok && edn_is_coll(gv) {
+	if gv, has := edn_get(m, "graphics"); has && edn_is_coll(gv) {
 		for g in gv.items {
 			if !edn_is_coll(g) || len(g.items) == 0 || g.items[0].kind != .Keyword {
 				config_error(tcat(ctx, ": a graphics item must look like [:line x y x y …]"))

@@ -350,7 +350,7 @@ defined_names :: proc(lines: []string) -> map[string]bool {
 
 @(private = "file")
 check_pins :: proc(nl: ^Netlist, s: ^Schematic) {
-	for &c, ci in s.comps {
+	for &c in s.comps {
 		sym := symbol_find(c.sym)
 		if sym == nil || sym.kind != .Part do continue
 		for k in 0 ..< len(sym.pins) {
@@ -359,7 +359,6 @@ check_pins :: proc(nl: ^Netlist, s: ^Schematic) {
 				append(&nl.warnings, fmt.tprintf("%s: pin %s is not connected", c.ref, sym.pins[k].name))
 			}
 		}
-		_ = ci
 	}
 }
 
@@ -869,7 +868,6 @@ source_tokens :: proc(v: string) -> [dynamic]string {
 vacask_source :: proc(v: string) -> (string, string) {
 	b := strings.builder_make(context.temp_allocator)
 	toks := source_tokens(v)
-	num :: proc(s: string) -> string {return vacask_value(s)}
 	args :: proc(t: string) -> []string {
 		o := strings.index_byte(t, '(')
 		c := strings.last_index_byte(t, ')')
@@ -877,20 +875,19 @@ vacask_source :: proc(v: string) -> (string, string) {
 		if c < o do c = len(t)
 		return strings.fields(t[o + 1:c], context.temp_allocator)
 	}
-	have_type := false
 	i := 0
 	for i < len(toks) {
 		tk := toks[i]
 		lt := lower(tk)
 		switch {
 		case lt == "dc" && i + 1 < len(toks):
-			fmt.sbprintf(&b, " dc=%s", num(toks[i + 1]))
+			fmt.sbprintf(&b, " dc=%s", vacask_value(toks[i + 1]))
 			i += 2
 			continue
 		case lt == "ac" && i + 1 < len(toks):
-			fmt.sbprintf(&b, " mag=%s", num(toks[i + 1]))
+			fmt.sbprintf(&b, " mag=%s", vacask_value(toks[i + 1]))
 			if i + 2 < len(toks) && is_number_token(toks[i + 2]) {
-				fmt.sbprintf(&b, " phase=%s", num(toks[i + 2]))
+				fmt.sbprintf(&b, " phase=%s", vacask_value(toks[i + 2]))
 				i += 1
 			}
 			i += 2
@@ -899,14 +896,12 @@ vacask_source :: proc(v: string) -> (string, string) {
 			a := args(tk)
 			names := [?]string{"val0", "val1", "delay", "rise", "fall", "width", "period"}
 			strings.write_string(&b, " type=\"pulse\"")
-			for x, k in a do if k < len(names) do fmt.sbprintf(&b, " %s=%s", names[k], num(x))
-			have_type = true
+			for x, k in a do if k < len(names) do fmt.sbprintf(&b, " %s=%s", names[k], vacask_value(x))
 		case strings.has_prefix(lt, "sin("):
 			a := args(tk)
 			names := [?]string{"sinedc", "ampl", "freq", "delay", "theta", "tdphase"}
 			strings.write_string(&b, " type=\"sine\"")
-			for x, k in a do if k < len(names) do fmt.sbprintf(&b, " %s=%s", names[k], num(x))
-			have_type = true
+			for x, k in a do if k < len(names) do fmt.sbprintf(&b, " %s=%s", names[k], vacask_value(x))
 		case strings.has_prefix(lt, "exp("):
 			a := args(tk)
 			strings.write_string(&b, " type=\"exp\"")
@@ -920,26 +915,23 @@ vacask_source :: proc(v: string) -> (string, string) {
 					fmt.sbprintf(&b, " td2=%.12g", td2 - td1)
 					continue
 				}
-				fmt.sbprintf(&b, " %s=%s", names[k], num(x))
+				fmt.sbprintf(&b, " %s=%s", names[k], vacask_value(x))
 			}
-			have_type = true
 		case strings.has_prefix(lt, "pwl("):
 			a := args(tk)
 			strings.write_string(&b, " type=\"pwl\" wave=[")
 			for x, k in a {
 				if k > 0 do strings.write_string(&b, ", ")
-				strings.write_string(&b, num(x))
+				strings.write_string(&b, vacask_value(x))
 			}
 			strings.write_string(&b, "]")
-			have_type = true
 		case is_number_token(tk):
-			fmt.sbprintf(&b, " dc=%s", num(tk))
+			fmt.sbprintf(&b, " dc=%s", vacask_value(tk))
 		case:
 			return strings.to_string(b), fmt.tprintf("VACASK: cannot translate \"%s\" in the source value", tk)
 		}
 		i += 1
 	}
-	_ = have_type
 	return strings.trim_space(strings.to_string(b)), ""
 }
 
@@ -964,16 +956,6 @@ vacask_sensed :: proc(sym: ^Symbol, sim: ^Simulator_Def) -> int {
 	if sym.probe == "none" || sym.probe == "source" do return 0
 	if len(sym.pins) == 2 do return 1
 	return len(sym.pins)
-}
-
-VACASK_MODEL_TYPES := [?][3]string {
-	// spice type, osdi file, module
-	{"D", "spice/diode.osdi", "sp_diode"},
-	{"NPN", "spice/bjt.osdi", "sp_bjt"},
-	{"PNP", "spice/bjt.osdi", "sp_bjt"},
-	{"VDMOS", "spice/vdmos.osdi", "sp_vdmos"},
-	{"NJF", "spice/jfet1.osdi", "sp_jfet1"},
-	{"PJF", "spice/jfet1.osdi", "sp_jfet1"},
 }
 
 // ".model NAME TYPE(p=v …)" → loads and "model NAME module type=… p=v".
@@ -1174,34 +1156,34 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 				for m in ns.vacask.models do add_unique(&models, m)
 			}
 			out_lines := make([dynamic]string, context.temp_allocator)
-			for line_ in strings.split(all, "\n", context.temp_allocator) {
-			line := line_
-			// SPICE "ic=…" on a C or L: VACASK's devices have no such parameter. With uic the
-			// run starts from 0 V and 0 A anyway, so ic=0 is dropped; other values are not
-			// carried over (a warning says so)
-			if strings.contains(lower(line), " ic=") {
-				kept := make([dynamic]string, context.temp_allocator)
-				// the device's two nodes: "name (a b) model …"
-				pa, pb := "", ""
-				if o, cl_ := strings.index_byte(line, '('), strings.index_byte(line, ')'); o >= 0 && cl_ > o {
-					nf := strings.fields(line[o + 1:cl_], context.temp_allocator)
-					if len(nf) >= 2 do pa, pb = nf[0], nf[1]
-				}
-				for w in strings.fields(line, context.temp_allocator) {
-					if strings.has_prefix(lower(w), "ic=") {
-						v, ok := parse_eng(w[3:])
-						if strings.contains(line, " spicy_c ") && ok && len(pa) > 0 {
-							append(&cap_ic, ic_entry(pa, pb, fmt.tprintf("%.12g", v)))
-						} else if !ok || v != 0 {
-							append(&nl.warnings, fmt.tprintf("%s: %s is not supported by VACASK and was left out", c.ref, w))
-						}
-						continue
+			for dev_line in strings.split(all, "\n", context.temp_allocator) {
+				// SPICE "ic=…" on a C or L: VACASK's devices have no such parameter. With uic the
+				// run starts from 0 V and 0 A anyway, so ic=0 is dropped; other values are not
+				// carried over (a warning says so)
+				if strings.contains(lower(dev_line), " ic=") {
+					kept := make([dynamic]string, context.temp_allocator)
+					// the device's two nodes: "name (a b) model …"
+					pa, pb := "", ""
+					if o, cl_ := strings.index_byte(dev_line, '('), strings.index_byte(dev_line, ')'); o >= 0 && cl_ > o {
+						nf := strings.fields(dev_line[o + 1:cl_], context.temp_allocator)
+						if len(nf) >= 2 do pa, pb = nf[0], nf[1]
 					}
-					append(&kept, w)
+					for w in strings.fields(dev_line, context.temp_allocator) {
+						if strings.has_prefix(lower(w), "ic=") {
+							v, ok := parse_eng(w[3:])
+							if strings.contains(dev_line, " spicy_c ") && ok && len(pa) > 0 {
+								append(&cap_ic, ic_entry(pa, pb, fmt.tprintf("%.12g", v)))
+							} else if !ok || v != 0 {
+								append(&nl.warnings, fmt.tprintf("%s: %s is not supported by VACASK and was left out", c.ref, w))
+							}
+							continue
+						}
+						append(&kept, w)
+					}
+					append(&out_lines, strings.join(kept[:], " ", context.temp_allocator))
+					continue
 				}
-				line = strings.join(kept[:], " ", context.temp_allocator)
-			}
-			append(&out_lines, line)
+				append(&out_lines, dev_line)
 			}
 			line = strings.join(out_lines[:], "\n", context.temp_allocator)
 		}

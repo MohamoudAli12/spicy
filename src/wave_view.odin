@@ -1063,7 +1063,7 @@ draw_waves :: proc(d: ^Doc, r: Rect) {
 	}
 	// cursor readout
 	if w.cursors[0].on || w.cursors[1].on do draw_cursor_box(w, body, fsz)
-	wave_interact(d, w, body, fsz)
+	wave_interact(d, w)
 }
 
 @(private = "file")
@@ -1373,11 +1373,10 @@ draw_wave_header :: proc(d: ^Doc, r: Rect) {
 			for &p in w.panes do p.auto_y = true
 		}
 	}
-	_ = fsz
 }
 
 @(private = "file")
-wave_interact :: proc(d: ^Doc, w: ^Wave_View, body: Rect, fsz: f32) {
+wave_interact :: proc(d: ^Doc, w: ^Wave_View) {
 	m := ui.mouse
 	pi := wave_mouse_pane
 	if idx := menu_result("wave.leg"); idx >= 0 {
@@ -1652,8 +1651,6 @@ wave_interact :: proc(d: ^Doc, w: ^Wave_View, body: Rect, fsz: f32) {
 			ui.tip_since = ui.time - S.tooltip_delay
 		}
 	}
-	_ = fsz
-	_ = body
 }
 
 wave_ctx_pane: int
@@ -1738,13 +1735,13 @@ wave_load_setup :: proc(w: ^Wave_View, text: string) {
 			p := Pane{auto_y = true}
 			list := pane
 			if pane.kind == .Map {
-				fl, ok := edn_get(pane, "fft")
-				if !ok || !edn_is_coll(fl) do continue
+				fl, has_fft := edn_get(pane, "fft")
+				if !has_fft || !edn_is_coll(fl) do continue
 				list = fl
 				// what the file leaves out comes from settings.edn
 				f := fft_pane_new()
-				if v, ok := edn_get(pane, "t0"); ok && edn_is_num(v) do f.t0 = edn_num(v)
-				if v, ok := edn_get(pane, "t1"); ok && edn_is_num(v) do f.t1 = edn_num(v)
+				if t0, has := edn_get(pane, "t0"); has && edn_is_num(t0) do f.t0 = edn_num(t0)
+				if t1, has := edn_get(pane, "t1"); has && edn_is_num(t1) do f.t1 = edn_num(t1)
 				if k := fft_window_index(edn_str(pane, "window")); k >= 0 do f.window = k
 				f.db = edn_bool(pane, "db", f.db)
 				f.ax.log_x = edn_bool(pane, "log", f.ax.log_x)

@@ -4,7 +4,8 @@
 #   make debug        debug build      -> ./spicy
 #   make install      build and install to ~/.local/bin (Linux: plus menu entry and icons)
 #   make uninstall    remove what install put there
-#   make test         unit tests + command-line tests
+#   make test         vet + unit tests + command-line tests
+#   make vet          the compiler's checks for unused and shadowed names (all platforms)
 #   make test-unit    unit tests (tests/*.odin, `odin test`)
 #   make test-cli     end-to-end tests of the built binary (needs ngspice on the PATH)
 #   make test-gui     GUI smoke test on a virtual display (Linux, needs xvfb-run)
@@ -28,7 +29,7 @@ endif
 
 SRC := $(wildcard src/*.odin) $(wildcard config/*.edn) symbols/standard.edn models/standard.lib assets/spicy.rc assets/spicy.ico $(wildcard assets/icons/*.png)
 
-.PHONY: all debug install uninstall clean test test-unit test-cli test-gui built
+.PHONY: all debug install uninstall clean test vet test-unit test-cli test-gui built
 
 all: spicy
 
@@ -73,6 +74,11 @@ ifeq ($(LINUX),yes)
 endif
 
 # The tests use a throw-away config folder (build/testcfg), never ~/.config/spicy.
+vet:
+	odin check src -vet
+	odin check src -vet -target:windows_amd64
+	odin check src -vet -target:darwin_arm64
+
 test-unit:
 	@mkdir -p build
 	SPICY_CONFIG_DIR=$(CURDIR)/build/testcfg odin test tests -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false -out:build/spicy-tests
@@ -83,7 +89,7 @@ test-cli: built
 test-gui: built
 	tests/gui_smoke.sh ./spicy
 
-test: test-unit test-cli
+test: vet test-unit test-cli
 
 clean:
 	rm -f spicy

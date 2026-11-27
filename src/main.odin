@@ -4,7 +4,6 @@ import "core:fmt"
 import "core:log"
 import os "core:os"
 import "core:strings"
-import "core:time"
 
 // Set by make with a leading "v" (-define:SPICY_VERSION=v2026-11): -define reads values made of
 // digits and dashes as numbers, the "v" keeps it a string. It is stripped here.

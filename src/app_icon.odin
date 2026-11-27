@@ -52,16 +52,21 @@ app_icon_apply :: proc(win: rawptr) {
 	when ODIN_OS == .Darwin {
 		app_icon_dock(ICON_PNG_LARGE)
 	} else {
-		if !icon_loaded {
-			icon_loaded = true
-			for png in ICON_PNGS {
-				img := rl.LoadImageFromMemory(".png", raw_data(png), c.int(len(png)))
-				if img.data == nil do continue
-				rl.ImageFormat(&img, .UNCOMPRESSED_R8G8B8A8) // kept for the program's lifetime
-				icon_images[icon_count] = {img.width, img.height, cast([^]u8)img.data}
-				icon_count += 1
-			}
-		}
-		if icon_count > 0 do glfwSetWindowIcon(win, c.int(icon_count), &icon_images[0])
+		glfw_icon_set(win)
 	}
+}
+
+@(private = "file")
+glfw_icon_set :: proc(win: rawptr) {
+	if !icon_loaded {
+		icon_loaded = true
+		for png in ICON_PNGS {
+			img := rl.LoadImageFromMemory(".png", raw_data(png), c.int(len(png)))
+			if img.data == nil do continue
+			rl.ImageFormat(&img, .UNCOMPRESSED_R8G8B8A8) // kept for the program's lifetime
+			icon_images[icon_count] = {img.width, img.height, cast([^]u8)img.data}
+			icon_count += 1
+		}
+	}
+	if icon_count > 0 do glfwSetWindowIcon(win, c.int(icon_count), &icon_images[0])
 }

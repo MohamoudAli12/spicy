@@ -39,10 +39,8 @@ models_load_user :: proc() {
 // Fills ports, pins (terminal names) and dev of a subcircuit entry. lines[i] is its .subckt line.
 subckt_info :: proc(e: ^Lib_Entry, lines: []string, i: int) {
 	head := strings.trim_space(lines[i])
-	k := i + 1
-	for k < len(lines) && strings.has_prefix(strings.trim_space(lines[k]), "+") {
-		head = tcat(head, " ", strings.trim_space(lines[k])[1:])
-		k += 1
+	for next := i + 1; next < len(lines) && strings.has_prefix(strings.trim_space(lines[next]), "+"); next += 1 {
+		head = tcat(head, " ", strings.trim_space(lines[next])[1:])
 	}
 	f := strings.fields(head, context.temp_allocator)
 	ports := make([dynamic]string)

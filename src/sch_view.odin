@@ -1213,20 +1213,19 @@ interact_paste :: proc(d: ^Doc, v: View, msnap: P, over: bool) {
 		for t in p.texts do append(&s.texts, Text{pos = t.pos + delta, text = strings.clone(t.text), directive = t.directive, sel = true})
 		wires_cleanup(s)
 		tool_set(d, .Select)
-		for &c in s.comps do if c.sel {} // keep the pasted items selected
-		sch_reselect_last(d, len(p.comps), len(p.wires), len(p.flags), len(p.texts))
+		sch_reselect_last(d, len(p.comps), len(p.flags), len(p.texts))
 	}
 	if ui.pressed[1] do tool_set(d, .Select)
 }
 
-// tool_set clears the selection; select the items just pasted again.
+// tool_set clears the selection; select the items just pasted again. Not the wires:
+// wires_cleanup may have merged them with others, so the last ones are not the pasted ones.
 @(private = "file")
-sch_reselect_last :: proc(d: ^Doc, nc, nw, nf, nt: int) {
+sch_reselect_last :: proc(d: ^Doc, nc, nf, nt: int) {
 	s := &d.sch
 	for i in max(0, len(s.comps) - nc) ..< len(s.comps) do s.comps[i].sel = true
 	for i in max(0, len(s.flags) - nf) ..< len(s.flags) do s.flags[i].sel = true
 	for i in max(0, len(s.texts) - nt) ..< len(s.texts) do s.texts[i].sel = true
-	_ = nw
 }
 
 // Adds the current of part ci (pin k, -1 = the part) to the waveforms.

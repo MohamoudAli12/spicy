@@ -181,7 +181,7 @@ raylib_log :: proc "c" (rl_level: rl.TraceLogLevel, text: cstring, args: ^c.va_l
 	context = runtime.default_context()
 	context.logger = app_logger
 	buf: [1024]u8
-	n := crt_vsnprintf(buf[:], text, cast(^libc.va_list)args)
+	n := crt_vsnprintf(buf[:], text, args)
 	if n < 0 do return
 	msg := string(buf[:min(int(n), len(buf) - 1)])
 	{

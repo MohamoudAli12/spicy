@@ -1,6 +1,5 @@
 package spicy
 
-import "core:c"
 import "core:c/libc"
 
 // The few C runtime functions spicy calls directly (ported from loomer, src/crt.odin).
@@ -23,13 +22,13 @@ when ODIN_OS == .Windows {
 	foreign ucrt {
 		@(link_name = "_time64") _crt_time :: proc(timer: ^libc.time_t) -> libc.time_t ---
 		@(link_name = "_localtime64") _crt_localtime :: proc(timer: ^libc.time_t) -> ^libc.tm ---
-		@(link_name = "vsnprintf") _crt_vsnprintf :: proc(s: [^]u8, n: c.size_t, format: cstring, arg: ^libc.va_list) -> c.int ---
+		@(link_name = "vsnprintf") _crt_vsnprintf :: proc(s: [^]u8, n: uint, format: cstring, arg: ^libc.va_list) -> i32 --- // size_t, int
 	}
 
 	crt_time :: proc "contextless" () -> libc.time_t {return _crt_time(nil)}
 	crt_localtime :: proc "contextless" (t: ^libc.time_t) -> ^libc.tm {return _crt_localtime(t)}
 	crt_vsnprintf :: proc "contextless" (buf: []u8, format: cstring, args: ^libc.va_list) -> int {
-		return int(_crt_vsnprintf(raw_data(buf), c.size_t(len(buf)), format, args))
+		return int(_crt_vsnprintf(raw_data(buf), uint(len(buf)), format, args))
 	}
 } else {
 	crt_time :: proc "contextless" () -> libc.time_t {return libc.time(nil)}

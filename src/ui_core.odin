@@ -830,8 +830,7 @@ text_field :: proc(id_s: string, r: Rect, s: ^string, placeholder := "") -> bool
 live_field :: proc(id_s: string, r: Rect, s: ^string, placeholder := "") -> bool {
 	id := id_of(id_s)
 	before := s^
-	commit, cancelled := edit_line(id, r, s^)
-	_ = commit
+	_, cancelled := edit_line(id, r, s^)
 	if ui.focus == id && string(ui.edit_buf[:]) != s^ do set_str(s, string(ui.edit_buf[:]))
 	if cancelled do set_str(s, "")
 	draw_field(id, r, s^, th.fg, placeholder)
