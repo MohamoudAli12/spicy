@@ -279,6 +279,15 @@ zen="$models_dir/zen.lib"
 check "repaired: µ"          cat "$zen" "IBV=100u"
 check "repaired: own line"   grep -c "^\.ENDS$" "$zen" "4"
 check "repaired: ZDiode in"  grep -B1 "^\.ENDS TVA" "$zen" "BV=31"
+
+# a ";" comment line inside a subcircuit (it once crashed the import)
+printf '.subckt SEMI a b\n; a comment\nR1 a b 1k\n.ends\n' > "$work/semi.lib"
+check "import: ; comment line" "$bin" --import-model "$work/semi.lib" --as-is "symbol   SEMI"
+# a numeric model name is renamed where an M line names its model (the 5th field), not in
+# its bulk node, which has the same number here
+printf '.SUBCKT NF 1 2 3\nM1 1 2 3 5 5\nR1 5 3 1\n.ENDS\n.MODEL 5 NMOS(VTO=1)\n' > "$work/numfet.lib"
+"$bin" --import-model "$work/numfet.lib" --repair >/dev/null 2>&1
+check "repaired: M line model" grep "^M1" "$models_dir/numfet.lib" "M1 1 2 3 5 M5"
 check "repaired: own model"  cat "$zen" "D1 1 2 TVCQ"
 symf="$imported"
 check "zener: A C pins"      grep -A1 '{:name "DI_DZA"' "$symf" ':like "diode"'
