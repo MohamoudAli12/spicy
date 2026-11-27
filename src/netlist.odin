@@ -15,11 +15,10 @@ Netlist :: struct {
 	base_dir: string, // folder of the schematic (relative .include paths)
 	local:    []Lib_Entry, // models and subcircuits the schematic defines itself
 	ngbehavior: string, // ngspice compatibility mode the netlist needs ("psa": PSpice models), or ""
-	// Xyce: "tran" or "dc" when the run asks for its results with a .print … format=raw line
-	// (Xyce's -r raw file has no device currents: no I(R1)), and what that line prints
-	xyce_print: string,
+	// Xyce: the netlist writes its results itself, with a .print … format=raw line (Xyce's -r
+	// raw file has no device currents: no I(R1)). Xyce names that file <netlist>.raw.
+	xyce_print_raw: bool,
 	xyce_noise_only: bool, // a Xyce netlist whose only analysis is .noise (Xyce runs just that one)
-	xyce_vars:  string,
 	plot_traces: []string, // the expressions of the .plot directives: shown after the run
 	meas_lines:  []string, // the arguments of the .meas directives: measured after the run
 	steps:       []Step_Value, // the .step values: one simulator run each

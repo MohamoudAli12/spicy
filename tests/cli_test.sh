@@ -36,6 +36,8 @@ check "config check"         "$bin" --check-config "no problems"
 check "ngspice netlist"      "$bin" --netlist "$work/rc_lowpass.edn" "R1 out N001 1k"
 check "ngspice model card"   "$bin" --netlist "$work/rc_lowpass.edn" ".model 1N4148 D"
 check "xyce netlist"         "$bin" --netlist "$work/rc_lowpass.edn" --sim xyce ".tran"
+# the netlist shown and exported is the one that runs: its .print line, for the device currents
+check "xyce netlist .print"  "$bin" --netlist "$work/rc_lowpass.edn" --sim xyce ".print tran format=raw V(*) I(*)"
 check "vacask netlist"       "$bin" --netlist "$work/rc_lowpass.edn" --sim vacask "analysis tran1 tran"
 check "vacask diode name"    "$bin" --netlist "$work/rc_lowpass.edn" --sim vacask "m_1n4148"
 check "opamp subcircuit"     "$bin" --netlist "$work/opamp_inverting.edn" ".subckt spicy_opamp"
@@ -370,6 +372,9 @@ printf '%s\n' '{:spicy-schematic 1 :components [{:symbol "res" :ref "R1" :value 
 	' :texts [{:at [0 200] :text ".op\n.include nowhere.lib" :directive true}]}' >"$work/inc.edn"
 check "missing include"      "$bin" --netlist "$work/inc.edn" "file not found"
 
+# a .step run whose second (last) value no simulator takes
+sed 's/:value "1k" :at \[288 0\]/:value "{rv}" :at [288 0]/; s/:text ".tran 20u"/:text ".tran 20u\\n.param rv=1k\\n.step param rv list 1k 1k*"/' "$work/rc_lowpass.edn" >"$work/badstep.edn"
+
 if command -v ngspice >/dev/null 2>&1; then
 	# V(dd) = 2 V by hand: 5 V through 1k into an NMOS in triode (kp·W/L = 0.5 mA/V², vgs = 5 V)
 	check "ngspice subckt"     "$bin" --text --run "$work/fet.edn" "v(dd)                        2 V"
@@ -386,6 +391,8 @@ if command -v ngspice >/dev/null 2>&1; then
 	sed 's/:value "1k" :at \[400 0\]/:value "1k bad=(" :at [400 0]/' "$work/fet.edn" >"$work/bad.edn"
 	check "failed run, no stale" "$bin" --text --run "$work/bad.edn" "without results"
 	check "ngspice transient"  "$bin" --text --run "$work/rc_lowpass.edn" "Transient Analysis"
+	# a .step run whose last value fails says so
+	check "step without results" "$bin" --text --run "$work/badstep.edn" "[rv=1k*]: no results"
 	check "ngspice netlist run" "$bin" --text --run "$work/buck.cir" "v(out)"
 	check "ngspice ac"         "$bin" --text --run "$work/rc_ac.edn" "AC Analysis"
 	check "ngspice opamp"      "$bin" --text --run "$work/opamp_inverting.edn" "v(out)"
@@ -415,6 +422,19 @@ EOF
 	if [ "$gain" = "10.00" ] || [ "$gain" = "9.99" ]; then pass "opamp gain $gain"; else fail "opamp gain $gain (want 10)"; fi
 else
 	echo "skip ngspice runs (ngspice is not on the PATH)"
+fi
+if command -v Xyce >/dev/null 2>&1; then
+	check "xyce device current" "$bin" --text --run "$work/rc_lowpass.edn" --sim xyce "I(R1)"
+	check "xyce step currents" "$bin" --text --run "$work/step.edn" --sim xyce "I(R1)"
+else
+	echo "skip Xyce runs (Xyce is not on the PATH)"
+fi
+if command -v vacask >/dev/null 2>&1; then
+	# a step that fails must not show the results of the step before (the same file names)
+	if "$bin" --text --run "$work/badstep.edn" --sim vacask 2>&1 | grep -qF '[rv=1k*]" ('; then fail "vacask failed step, no stale"; else pass "vacask failed step, no stale"; fi
+	check "vacask step without results" "$bin" --text --run "$work/badstep.edn" --sim vacask "[rv=1k*]: no results"
+else
+	echo "skip VACASK runs (vacask is not on the PATH)"
 fi
 
 # editing without the GUI (scripts, AI agents): build an RC filter from nothing

@@ -16,9 +16,9 @@ Run_State :: enum u8 {Idle, Running, Done, Failed}
 Run_Step :: struct {
 	label:    string, // "R=2k" for a .step run, "" for a single run
 	netlist:  string,
-	raw:      string,
+	raw:      string, // where the results are (a simulator writing a raw file per analysis: Run.dir)
 	log_path: string,
-	out_path: string,
+	out_path: string, // the simulator's output (stdout and stderr)
 	cmd:      [dynamic]string,
 }
 
@@ -29,10 +29,6 @@ Run :: struct {
 	dialect:    Dialect,
 	raw_files:  Raw_Files,
 	dir:        string,
-	netlist:    string, // path of the current step
-	raw:        string,
-	log_path:   string,
-	out_path:   string,
 	proc_:      os.Process,
 	out_file:   ^os.File,
 	started:    time.Tick,
@@ -54,8 +50,7 @@ Run :: struct {
 run_free :: proc(r: ^Run) {
 	for &p in r.plots do plot_free(&p)
 	delete(r.plots)
-	delete(r.sim_id); delete(r.sim_name); delete(r.dir); delete(r.netlist)
-	delete(r.raw); delete(r.log_path); delete(r.out_path); delete(r.message)
+	delete(r.sim_id); delete(r.sim_name); delete(r.dir); delete(r.message)
 	delete(r.log_text); delete(r.net_text)
 	for w in r.warnings do delete(w)
 	delete(r.warnings)
@@ -69,11 +64,7 @@ run_free :: proc(r: ^Run) {
 	delete(r.measures)
 	for row in r.meas_rows do delete_meas_row(row)
 	delete(r.meas_rows)
-	for &st in r.steps {
-		delete(st.label); delete(st.netlist); delete(st.raw); delete(st.log_path); delete(st.out_path)
-		for c in st.cmd do delete(c)
-		delete(st.cmd)
-	}
+	for &st in r.steps do run_step_free(&st)
 	delete(r.steps)
 	r^ = {}
 }
@@ -108,18 +99,9 @@ run_start :: proc(r: ^Run, sch: ^Schematic, doc_path: string, doc_id: int, sim: 
 	r.dir = strings.clone(dir)
 	os.make_directory_all(dir)
 	ext := "sim" if sim.dialect == .Vacask else "net"
-	r.netlist = strings.clone(path_join(dir, tcat(stem, ".", ext)))
-	r.raw = strings.clone(path_join(dir, tcat(stem, ".raw")))
-	r.log_path = strings.clone(path_join(dir, tcat(stem, ".log")))
-	r.out_path = strings.clone(path_join(dir, tcat(stem, ".out")))
 
 	title := doc_path if len(doc_path) > 0 else stem
 	nl := netlist_build(sch, sim, tcat("spicy: ", base_name(title)), dir_of(abs_path(doc_path)) if len(doc_path) > 0 else "")
-	if len(nl.xyce_print) > 0 && sim.raw != .Per_Analysis {
-		// the results from a .print line (it has the device currents), not from -r (below)
-		cut := strings.last_index(nl.text, ".end")
-		if cut >= 0 do nl.text = tcat(nl.text[:cut], fmt.tprintf(".print %s format=raw file=%s %s\n", nl.xyce_print, base_name(r.raw), nl.xyce_vars), nl.text[cut:])
-	}
 	r.net_text = strings.clone(nl.text)
 	for w in nl.warnings do append(&r.warnings, strings.clone(w))
 	for e in nl.plot_traces do append(&r.plot_traces, strings.clone(e))
@@ -128,11 +110,6 @@ run_start :: proc(r: ^Run, sch: ^Schematic, doc_path: string, doc_id: int, sim: 
 		r.state = .Failed
 		r.message = strings.clone(strings.join(nl.errors[:], "\n", context.temp_allocator))
 		return
-	}
-	// old results must not be mistaken for new ones
-	if sim.raw == .Per_Analysis {
-		_, files := list_dir(dir, {"raw"})
-		for f in files do os.remove(path_join(dir, f))
 	}
 	// one step: the schematic's own files; a .step run: a netlist, raw and log per value
 	n := max(1, len(nl.steps))
@@ -144,55 +121,54 @@ run_start :: proc(r: ^Run, sch: ^Schematic, doc_path: string, doc_id: int, sim: 
 			label = nl.steps[k].label
 			text = step_netlist(nl.text, nl.steps[k].assign, sim.dialect == .Vacask)
 			step_stem = tcat(stem, ".step", itoa(k + 1))
-			// Xyce's .print line names the raw file: this step's own
-			if len(nl.xyce_print) > 0 && sim.raw != .Per_Analysis {
-				text, _ = strings.replace_all(text, tcat("file=", base_name(r.raw)), tcat("file=", step_stem, ".raw"), context.temp_allocator)
-			}
 		}
+		netlist := path_join(dir, tcat(step_stem, ".", ext))
 		st := Run_Step{
 			label    = strings.clone(label),
-			netlist  = strings.clone(path_join(dir, tcat(step_stem, ".", ext))),
-			raw      = strings.clone(path_join(dir, tcat(step_stem, ".raw"))),
+			netlist  = strings.clone(netlist),
+			raw      = strings.clone(tcat(netlist, ".raw") if nl.xyce_print_raw else path_join(dir, tcat(step_stem, ".raw"))),
 			log_path = strings.clone(path_join(dir, tcat(step_stem, ".log"))),
 			out_path = strings.clone(path_join(dir, tcat(step_stem, ".out"))),
 		}
-		// results of an earlier run must not be read as this one's (a simulator may write none)
-		os.remove(tcat(st.netlist, "_noise.dat"))
-		os.remove(st.raw)
 		if !write_text(st.netlist, text) {
 			r.state = .Failed
 			r.message = fmt.aprintf("cannot write %s", st.netlist)
 			run_step_free(&st)
 			return
 		}
-		// the command, with this step's files
-		cmd := make([dynamic]string, context.temp_allocator)
-		for a in sim.command {
-			x := a
-			x, _ = strings.replace_all(x, "{netlist}", st.netlist, context.temp_allocator)
-			x, _ = strings.replace_all(x, "{raw}", st.raw, context.temp_allocator)
-			x, _ = strings.replace_all(x, "{log}", st.log_path, context.temp_allocator)
-			x, _ = strings.replace_all(x, "{dir}", r.dir, context.temp_allocator)
-			if strings.has_prefix(x, "~/") do x = path_join(home_dir(), x[2:])
-			append(&cmd, x)
-		}
-		// Xyce with a .print … format=raw line, or a noise-only netlist (its noise is in the
-		// _noise.dat file, and -r would only add the transfer function): no -r
-		if (len(nl.xyce_print) > 0 || nl.xyce_noise_only) && sim.raw != .Per_Analysis {
-			for i := 1; i + 1 < len(cmd); i += 1 do if cmd[i] == "-r" && cmd[i + 1] == st.raw {
-				remove_range(&cmd, i, i + 2)
-				break
-			}
-		}
-		// PSpice models: ngspice's compatibility mode (unless the command sets one itself)
-		if len(nl.ngbehavior) > 0 && sim_is_ngspice(sim) && len(cmd) > 0 && !strings.contains(strings.join(sim.command, " ", context.temp_allocator), "ngbehavior") {
-			inject_at(&cmd, 1, "-D", tcat("ngbehavior=", nl.ngbehavior))
-		}
-		for c in cmd do append(&st.cmd, strings.clone(c))
+		for c in run_command(sim, &nl, &st, dir) do append(&st.cmd, strings.clone(c))
 		append(&r.steps, st)
 	}
 	r.cur = 0
 	run_launch(r)
+}
+
+// The command line of a step: the simulator's :command with the step's files.
+@(private = "file")
+run_command :: proc(sim: ^Simulator_Def, nl: ^Netlist, st: ^Run_Step, dir: string) -> []string {
+	cmd := make([dynamic]string, context.temp_allocator)
+	for a in sim.command {
+		x := a
+		x, _ = strings.replace_all(x, "{netlist}", st.netlist, context.temp_allocator)
+		x, _ = strings.replace_all(x, "{raw}", st.raw, context.temp_allocator)
+		x, _ = strings.replace_all(x, "{log}", st.log_path, context.temp_allocator)
+		x, _ = strings.replace_all(x, "{dir}", dir, context.temp_allocator)
+		if strings.has_prefix(x, "~/") do x = path_join(home_dir(), x[2:])
+		append(&cmd, x)
+	}
+	// Xyce with a .print … format=raw line, or a noise-only netlist (its noise is in the
+	// _noise.dat file, and -r would only add the transfer function): no -r
+	if nl.xyce_print_raw || nl.xyce_noise_only {
+		for i := 1; i + 1 < len(cmd); i += 1 do if cmd[i] == "-r" && cmd[i + 1] == st.raw {
+			remove_range(&cmd, i, i + 2)
+			break
+		}
+	}
+	// PSpice models: ngspice's compatibility mode (unless the command sets one itself)
+	if len(nl.ngbehavior) > 0 && sim_is_ngspice(sim) && len(cmd) > 0 && !strings.contains(strings.join(sim.command, " ", context.temp_allocator), "ngbehavior") {
+		inject_at(&cmd, 1, "-D", tcat("ngbehavior=", nl.ngbehavior))
+	}
+	return cmd[:]
 }
 
 @(private = "file")
@@ -205,13 +181,16 @@ run_step_free :: proc(st: ^Run_Step) {
 // Starts the simulator for the current step.
 run_launch :: proc(r: ^Run) {
 	st := &r.steps[r.cur]
-	set_str(&r.netlist, st.netlist)
-	set_str(&r.raw, st.raw)
-	set_str(&r.log_path, st.log_path)
-	set_str(&r.out_path, st.out_path)
-	os.remove(r.raw)
-	os.remove(r.log_path)
-	out, oerr := os.create(r.out_path)
+	// results of an earlier run or step must not be read as this one's (a simulator that
+	// fails writes none): a per-analysis simulator writes the same names every step
+	if r.raw_files == .Per_Analysis {
+		_, files := list_dir(r.dir, {"raw"})
+		for f in files do os.remove(path_join(r.dir, f))
+	}
+	os.remove(st.raw)
+	os.remove(tcat(st.netlist, "_noise.dat"))
+	os.remove(st.log_path)
+	out, oerr := os.create(st.out_path)
 	if oerr == nil do r.out_file = out
 	log.infof("run: %s", strings.join(st.cmd[:], " ", context.temp_allocator))
 	p, err := os.process_start({command = st.cmd[:], working_dir = r.dir, stdout = r.out_file, stderr = r.out_file})
@@ -261,9 +240,10 @@ run_poll :: proc(r: ^Run) -> bool {
 		return false
 	}
 	if r.out_file != nil {os.close(r.out_file); r.out_file = nil}
-	label := r.steps[r.cur].label
-	lt, _ := read_text(r.log_path, context.temp_allocator)
-	ot, _ := read_text(r.out_path, context.temp_allocator)
+	step := &r.steps[r.cur]
+	label := step.label
+	lt, _ := read_text(step.log_path, context.temp_allocator)
+	ot, _ := read_text(step.out_path, context.temp_allocator)
 	text := strings.trim_space(tcat(ot, "\n", lt))
 	if len(r.steps) == 1 {
 		run_log_add(r, "", text)
@@ -277,8 +257,8 @@ run_poll :: proc(r: ^Run) -> bool {
 	if r.raw_files == .Per_Analysis {
 		_, fs := list_dir(r.dir, {"raw"})
 		for f in fs do append(&files, path_join(r.dir, f))
-	} else if file_exists(r.raw) {
-		append(&files, r.raw)
+	} else if file_exists(step.raw) {
+		append(&files, step.raw)
 	}
 	errs := make([dynamic]string, context.temp_allocator)
 	before := len(r.plots)
@@ -296,7 +276,7 @@ run_poll :: proc(r: ^Run) -> bool {
 		delete(plots)
 	}
 	// Xyce writes its noise analysis to a text file beside the netlist; VACASK's noise is a raw file
-	noise_file := tcat(r.steps[r.cur].netlist, "_noise.dat")
+	noise_file := tcat(step.netlist, "_noise.dat")
 	if file_exists(noise_file) {
 		np, nerr := xyce_noise_read(noise_file)
 		if len(nerr) > 0 do append(&errs, nerr)
@@ -333,9 +313,9 @@ run_poll :: proc(r: ^Run) -> bool {
 			r.op[strings.clone(n)] = v.re[0]
 		}
 	}
+	if len(r.steps) > 1 && len(r.plots) == before do append(&r.warnings, strings.clone(fmt.tprintf("[%s]: no results", label)))
 	// the next value of a .step run
 	if r.cur + 1 < len(r.steps) {
-		if len(r.plots) == before do append(&r.warnings, strings.clone(fmt.tprintf("[%s]: no results", label)))
 		r.cur += 1
 		run_launch(r)
 		return r.state == .Failed

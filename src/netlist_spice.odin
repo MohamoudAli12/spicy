@@ -102,21 +102,24 @@ netlist_spice :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: s
 		}
 		nl.xyce_noise_only = noise && others == 0
 		if noise && others > 0 do append(&nl.warnings, "Xyce runs only the .noise analysis of this schematic: its .tran, .ac, .dc and .op are not run (use ngspice or VACASK to run them together)")
+		// the results of a .tran (else of a .dc) with every current, unless the simulator
+		// is set to write one raw file per analysis itself
+		analysis := ""
 		for l in dl {
 			low := lower(strings.trim_space(l))
-			if strings.has_prefix(low, ".tran") do nl.xyce_print = "tran"
-			else if strings.has_prefix(low, ".dc") && len(nl.xyce_print) == 0 do nl.xyce_print = "dc"
+			if strings.has_prefix(low, ".tran") do analysis = "tran"
+			else if strings.has_prefix(low, ".dc") && len(analysis) == 0 do analysis = "dc"
 		}
-		if len(nl.xyce_print) > 0 {
-			vars := strings.builder_make(context.temp_allocator)
-			strings.write_string(&vars, "V(*) I(*)")
+		if len(analysis) > 0 && sim.raw != .Per_Analysis {
+			nl.xyce_print_raw = true
+			fmt.sbprintf(&b, ".print %s format=raw V(*) I(*)", analysis)
 			for &c in s.comps {
 				sym := symbol_find(c.sym)
 				if sym == nil || sym.kind != .Part || comp_subckt(&c, sym, nl.local) != nil do continue
 				if len(c.ref) == 0 || !strings.contains_rune("QqMmJj", rune(c.ref[0])) do continue
-				for pd in sym.pins do if len(pd.cur) > 0 && len(pd.element) == 0 do fmt.sbprintf(&vars, " I%s(%s)", strings.to_upper(pd.cur, context.temp_allocator), c.ref)
+				for pd in sym.pins do if len(pd.cur) > 0 && len(pd.element) == 0 do fmt.sbprintf(&b, " I%s(%s)", strings.to_upper(pd.cur, context.temp_allocator), c.ref)
 			}
-			nl.xyce_vars = strings.clone(strings.to_string(vars), context.temp_allocator)
+			strings.write_byte(&b, '\n')
 		}
 	}
 	if !have_analysis do append(&nl.errors, "no analysis: add a .tran, .ac, .dc or .op directive (Simulate › Edit simulation command)")
