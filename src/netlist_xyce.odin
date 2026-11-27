@@ -1,0 +1,134 @@
+package spicy
+
+import "core:fmt"
+import "core:strings"
+
+// Xyce reads ngspice's netlists except for a few cards (models from ngspice libraries,
+// netlists exported by other tools, the built-in SW card): the switch models and the
+// ngspice-style .options are translated for it.
+
+sim_is_xyce :: proc(sim: ^Simulator_Def) -> bool {
+	if lower(sim.id) == "xyce" do return true
+	return len(sim.command) > 0 && strings.contains(lower(base_name(sim.command[0])), "xyce")
+}
+
+xyce_fixups :: proc(text: string) -> string {
+	fx: Xyce_Fix
+	// .model and .options cards as one line each (their "+" continuation lines joined)
+	lines := make([dynamic]string, context.temp_allocator)
+	for l in split_lines(text) {
+		t := strings.trim_left_space(l)
+		if strings.has_prefix(t, "+") && len(lines) > 0 {
+			prev := lower(strings.trim_left_space(lines[len(lines) - 1]))
+			if strings.has_prefix(prev, ".model") || strings.has_prefix(prev, ".option") {
+				lines[len(lines) - 1] = tcat(lines[len(lines) - 1], " ", t[1:])
+				continue
+			}
+		}
+		append(&lines, l)
+	}
+	b := strings.builder_make(context.temp_allocator)
+	for l, i in lines {
+		low := lower(strings.trim_space(l))
+		switch {
+		case strings.has_prefix(low, ".model"): strings.write_string(&b, xyce_model(l, &fx))
+		case strings.has_prefix(low, ".option"): strings.write_string(&b, xyce_options(l, &fx))
+		case: strings.write_string(&b, l)
+		}
+		if i < len(lines) - 1 do strings.write_byte(&b, '\n')
+	}
+	out := strings.to_string(b)
+	// Xyce sizes its time steps by the local truncation error, which collapses at the
+	// abrupt edges of ideal switches ("time step too small"); ERROPTION=1 steps by the
+	// solver's convergence instead (and the .tran step / breakpoints), as ngspice manages them.
+	if fx.switches && !fx.own_timeint {
+		if strings.contains(out, "\n.options timeint ") {
+			out, _ = strings.replace(out, "\n.options timeint ", "\n.options timeint erroption=1 ", 1, context.temp_allocator)
+		} else {
+			cut := strings.last_index(lower(out), "\n.end")
+			if cut >= 0 do out = tcat(out[:cut], "\n* ideal switches: time steps by convergence\n.options timeint erroption=1", out[cut:])
+		}
+	}
+	return out
+}
+
+@(private = "file")
+Xyce_Fix :: struct {
+	switches:    bool, // ngspice switch models were translated
+	own_timeint: bool, // the netlist sets Xyce's time integration options itself
+}
+
+// ngspice's SW / CSW switch models as Xyce's VSWITCH / ISWITCH. ngspice switches abruptly at
+// VT ± VH (with hysteresis); Xyce goes smoothly from VOFF to VON, so VON = VT + |VH| and
+// VOFF = VT - |VH|, a little apart when there is no hysteresis.
+@(private = "file")
+xyce_model :: proc(l: string, fx: ^Xyce_Fix) -> string {
+	f := strings.fields(replace_parens(l), context.temp_allocator)
+	if len(f) < 3 do return l
+	typ := lower(f[2])
+	if typ != "sw" && typ != "csw" do return l
+	fx.switches = true
+	keys, vals, _ := card_params(f, 3)
+	th, hy := "vt", "vh"
+	on, off := "VON", "VOFF"
+	if typ == "csw" do th, hy, on, off = "it", "ih", "ION", "IOFF"
+	t_s, h_s := "0", "0"
+	b := strings.builder_make(context.temp_allocator)
+	fmt.sbprintf(&b, ".model %s %s(", f[1], "VSWITCH" if typ == "sw" else "ISWITCH")
+	n := 0
+	for k, i in keys {
+		switch k {
+		case th: t_s = vals[i]
+		case hy: h_s = vals[i]
+		case "ron", "roff":
+			fmt.sbprintf(&b, "%s%s=%s", " " if n > 0 else "", upper(k), vals[i])
+			n += 1
+		}
+	}
+	sep := " " if n > 0 else ""
+	t, tok := parse_eng(t_s)
+	h, hok := parse_eng(h_s)
+	if tok && hok {
+		h = abs(h)
+		if h == 0 do h = 1e-3 * max(abs(t), 1e-3)
+		fmt.sbprintf(&b, "%s%s=%.9g %s=%.9g)", sep, on, t + h, off, t - h)
+	} else {
+		// expressions: let Xyce work them out
+		ts := strings.trim(t_s, "{}")
+		hs := strings.trim(h_s, "{}")
+		fmt.sbprintf(&b, "%s%s={(%s)+abs(%s)+1e-6} %s={(%s)-abs(%s)-1e-6})", sep, on, ts, hs, off, ts, hs)
+	}
+	return strings.to_string(b)
+}
+
+// ngspice's ".options k=v …" as Xyce's ".options <package> k=v …"; what Xyce has no
+// equivalent for is left out (in a comment). Xyce's own ".options timeint …" stays.
+@(private = "file")
+xyce_options :: proc(l: string, fx: ^Xyce_Fix) -> string {
+	f := strings.fields(replace_parens(l), context.temp_allocator)
+	if len(f) < 2 do return l
+	if len(f) < 3 || f[2] != "=" {
+		// ".options timeint method=gear" (Xyce) or ".options savecurrents" (an ngspice flag)
+		w := lower(f[1])
+		if w == "timeint" do fx.own_timeint = true
+		for pk in ([?]string{"timeint", "device", "nonlin", "nonlin-tran", "nonlin-hb", "linsol", "linsol-hb", "output", "restart", "hbint", "parser", "measure", "sensitivity", "diagnostic"}) do if w == pk do return l
+	}
+	keys, vals, flags := card_params(f, 1)
+	timeint := make([dynamic]string, context.temp_allocator)
+	device := make([dynamic]string, context.temp_allocator)
+	dropped := make([dynamic]string, context.temp_allocator)
+	for k, i in keys {
+		kv := tcat(k, "=", vals[i])
+		switch k {
+		case "method", "reltol", "abstol", "maxord": append(&timeint, kv)
+		case "temp", "tnom", "gmin": append(&device, kv)
+		case: append(&dropped, kv)
+		}
+	}
+	append(&dropped, ..flags[:]) // such as savecurrents
+	b := strings.builder_make(context.temp_allocator)
+	if len(timeint) > 0 do fmt.sbprintf(&b, ".options timeint %s\n", strings.join(timeint[:], " ", context.temp_allocator))
+	if len(device) > 0 do fmt.sbprintf(&b, ".options device %s\n", strings.join(device[:], " ", context.temp_allocator))
+	if len(dropped) > 0 do fmt.sbprintf(&b, "* ngspice options Xyce does not have: %s\n", strings.join(dropped[:], " ", context.temp_allocator))
+	return strings.trim_right(strings.to_string(b), "\n")
+}

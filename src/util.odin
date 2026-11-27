@@ -268,3 +268,16 @@ open_external :: proc(target: string) -> bool {
 // Magnitude and phase (degrees) of a complex value.
 abs_c :: proc(re, im: f64) -> f64 {return math.sqrt(re * re + im * im)}
 phase_deg :: proc(re, im: f64) -> f64 {return math.to_degrees(math.atan2(im, re))}
+
+sanitize :: proc(s: string) -> string {
+	b := strings.builder_make(context.temp_allocator)
+	for ch in lower(s) {
+		switch {
+		case ch == '+': strings.write_byte(&b, 'p')
+		case ch == '-': strings.write_byte(&b, 'n')
+		case (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_': strings.write_rune(&b, ch)
+		case: strings.write_byte(&b, '_')
+		}
+	}
+	return strings.to_string(b)
+}
