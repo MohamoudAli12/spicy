@@ -93,7 +93,19 @@ Comp_Text :: struct {
 	show: bool,
 }
 
+// Where a part's name and value are written: their usual place, moved by where the user
+// dragged them.
 comp_texts :: proc(v: View, c: ^Comp, sym: ^Symbol) -> (ref, val: Comp_Text) {
+	ref, val = comp_texts_usual(v, c, sym)
+	ref.r.x += f32(c.ref_off.x) * v.z
+	ref.r.y += f32(c.ref_off.y) * v.z
+	val.r.x += f32(c.val_off.x) * v.z
+	val.r.y += f32(c.val_off.y) * v.z
+	return
+}
+
+@(private = "file")
+comp_texts_usual :: proc(v: View, c: ^Comp, sym: ^Symbol) -> (ref, val: Comp_Text) {
 	sz := S.text_size * v.z
 	if sz < 5 do return
 	ref.s, ref.show = c.ref, S.show_refs
@@ -449,6 +461,7 @@ transform_selection :: proc(s: ^Schematic, mirror: bool) {
 		return rot_about(p, c)
 	}
 	for &x in s.comps do if x.sel {
+		x.ref_off, x.val_off = {}, {}
 		x.pos = tf(x.pos, c, mirror)
 		if mirror {
 			x.rot = (4 - x.rot) % 4
@@ -800,6 +813,17 @@ interact_select :: proc(d: ^Doc, v: View, r: Rect, hit: Hit, msnap: P, mp: [2]f3
 			sch_edit_selected(d)
 			return
 		}
+		// a part's name or value: drag it to another place (the part stays)
+		if !ui.double && !ui.shift && !ui.alt {
+			if ci, field := comp_text_at(d, v, m); field != 0 {
+				sch_select_all(d, false)
+				s.comps[ci].sel = true
+				c := &s.comps[ci]
+				d.drag = {kind = .Comp_Text, start = m, start_p = mp, ci = ci, field = field, off0 = c.ref_off if field == 1 else c.val_off}
+				set_str(&d.drag.base, sch_to_edn(s))
+				return
+			}
+		}
 		if ui.alt && hit.kind == .None {
 			// Alt+click probes in the select tool too
 			return
@@ -874,6 +898,21 @@ interact_select :: proc(d: ^Doc, v: View, r: Rect, hit: Hit, msnap: P, mp: [2]f3
 				for &t in s.texts do if inside(pf(t.pos), lo, hi) do t.sel = true
 			}
 		}
+	case .Comp_Text:
+		ui.cursor = .RESIZE_ALL
+		if d.drag.ci >= len(s.comps) {
+			d.drag.kind = .None
+			break
+		}
+		c := &s.comps[d.drag.ci]
+		dd := mp - d.drag.start_p
+		off := d.drag.off0 + P{i32(math.round(dd.x)), i32(math.round(dd.y))}
+		if d.drag.field == 1 do c.ref_off = off
+		else do c.val_off = off
+		if !ui.down[0] {
+			d.drag.kind = .None
+			if off != d.drag.off0 do doc_push_undo_text(d, d.drag.base)
+		}
 	case .None, .Pan:
 	}
 	// context menu
@@ -886,7 +925,7 @@ interact_select :: proc(d: ^Doc, v: View, r: Rect, hit: Hit, msnap: P, mp: [2]f3
 		}
 		items: []string
 		switch hit.kind {
-		case .Comp: items = {"Edit…\tEnter", "Rotate\tCtrl+R", "Mirror\tCtrl+E", "Copy\tCtrl+C", "Delete\tDel", "-", "Probe current", "Probe voltages at the pins", "-", "Edit symbol…"}
+		case .Comp: items = {"Edit…\tEnter", "Rotate\tCtrl+R", "Mirror\tCtrl+E", "Copy\tCtrl+C", "Delete\tDel", "-", "Probe current", "Probe voltages at the pins", "-", "Edit symbol…", "Reset name and value positions"}
 		case .Wire: items = {"Probe voltage", "Name this net…", "-", "Delete\tDel"}
 		case .Flag: items = {"Rename…", "Rotate\tCtrl+R", "Delete\tDel"}
 		case .Text: items = {"Edit…\tEnter", "Delete\tDel"}
@@ -920,6 +959,9 @@ context_pick :: proc(d: ^Doc, idx: int) {
 			for n in ni.pin_net[h.idx] do if ni.names[n] != "0" do wave_add_trace(&d.wave, fmt.tprintf("V(%s)", ni.names[n]), false)
 		case 9:
 			if sym := symbol_find(d.sch.comps[h.idx].sym); sym != nil && sym.kind == .Part do symed_open(sym, d, h.idx)
+		case 10:
+			doc_push_undo(d)
+			for &c in d.sch.comps do if c.sel {c.ref_off = {}; c.val_off = {}}
 		}
 	case .Wire:
 		switch idx {

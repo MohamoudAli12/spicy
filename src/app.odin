@@ -49,7 +49,7 @@ Doc :: struct {
 	wave:        Wave_View,
 }
 
-Drag_Kind :: enum u8 {None, Pending, Move, Box, Pan}
+Drag_Kind :: enum u8 {None, Pending, Move, Box, Pan, Comp_Text}
 
 Drag :: struct {
 	kind:     Drag_Kind,
@@ -58,6 +58,9 @@ Drag :: struct {
 	base:     string, // schematic before the move (EDN)
 	detach:   bool, // ctrl: move without dragging the wires
 	last_d:   P,
+	ci:       int, // Comp_Text: the part, and 1 name / 2 value
+	field:    u8,
+	off0:     P, // its offset when the drag started
 }
 
 Dialog_Kind :: enum u8 {
@@ -907,7 +910,7 @@ draw_tabs :: proc(r: Rect) {
 tool_hint :: proc(d: ^Doc) -> string {
 	switch d.tool {
 	case .Select:
-		return "Click to select, drag to move (Ctrl+drag detaches wires), drag on empty space to select an area. Double-click to edit. Letters place parts (R C L D V I Q M …)."
+		return "Click to select, drag to move (Ctrl+drag detaches wires), drag on empty space to select an area. Drag a part's name or value to move it. Double-click to edit. Letters place parts (R C L D V I Q M …)."
 	case .Wire:
 		if d.wire_active do return "Click to add a corner, click a pin or wire to finish. Space flips the corner, right-click or Esc ends the wire."
 		return "Click to start a wire. Wires may run through parts: they connect only at the pins."

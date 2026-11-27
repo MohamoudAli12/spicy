@@ -22,6 +22,8 @@ Comp :: struct {
 	rot:    u8, // quarter turns clockwise
 	mirror: bool,
 	attrs:  [dynamic]Attr, // extra fields for the :spice template
+	// where the name and value were dragged to, from their usual place (schematic units)
+	ref_off, val_off: P,
 	sel:    bool,
 }
 
@@ -518,6 +520,8 @@ sch_to_edn :: proc(s: ^Schematic) -> string {
 		fmt.sbprintf(&b, "{{:symbol %s :ref %s :value %s :at [%d %d]", edn_quoted(c.sym), edn_quoted(c.ref), edn_quoted(c.value), c.pos.x, c.pos.y)
 		if c.rot != 0 do fmt.sbprintf(&b, " :rot %d", int(c.rot) * 90)
 		if c.mirror do strings.write_string(&b, " :mirror true")
+		if c.ref_off != {} do fmt.sbprintf(&b, " :ref-offset [%d %d]", c.ref_off.x, c.ref_off.y)
+		if c.val_off != {} do fmt.sbprintf(&b, " :value-offset [%d %d]", c.val_off.x, c.val_off.y)
 		if len(c.attrs) > 0 {
 			strings.write_string(&b, " :attrs {")
 			for a, k in c.attrs {
@@ -601,6 +605,8 @@ sch_from_edn :: proc(text: string) -> (s: Schematic, err: string) {
 				rot = edn_rot(m),
 				mirror = edn_bool(m, "mirror"),
 				attrs = make([dynamic]Attr),
+				ref_off = edn_p(m, "ref-offset"),
+				val_off = edn_p(m, "value-offset"),
 			}
 			if av, ok2 := edn_get(m, "attrs"); ok2 && av.kind == .Map {
 				for i := 0; i + 1 < len(av.items); i += 2 {
