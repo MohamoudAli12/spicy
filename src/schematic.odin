@@ -691,3 +691,23 @@ sch_bounds :: proc(s: ^Schematic) -> (lo, hi: [2]f32, ok: bool) {
 	}
 	return
 }
+
+// Opens a schematic file (.edn, or .asc imported).
+load_schematic_file :: proc(path: string) -> (s: Schematic, warnings: []string, err: string) {
+	data, ok := read_bytes(path, context.temp_allocator)
+	if !ok do return {}, nil, fmt.tprintf("cannot read %s", path)
+	if file_ext_lower(path) == "asc" {
+		sch, w, e := asc_import(data)
+		return sch, w[:], e
+	}
+	if is_netlist_ext(path) || (file_ext_lower(path) != "edn" && is_circuit_netlist(string(data))) {
+		sch, w, e := netlist_import(string(data))
+		return sch, w[:], e
+	}
+	sch, e := sch_from_edn(string(data))
+	if len(e) > 0 do return {}, nil, fmt.tprintf("%s: %s", path, e)
+	register_embedded_symbols(&sch, path)
+	unknown := make([dynamic]string, context.temp_allocator)
+	for c in sch.comps do if symbol_find(c.sym) == nil do append(&unknown, fmt.tprintf("%s: unknown symbol \"%s\"", c.ref, c.sym))
+	return sch, unknown[:], ""
+}

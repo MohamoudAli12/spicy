@@ -534,7 +534,7 @@ wave_eval :: proc(w: ^Wave_View, d: ^Doc) {
 		prev := 0.0
 		for i in 0 ..< n {
 			re, im := res.re[i], res.im[i]
-			mag := sqrt64(re * re + im * im)
+			mag := abs_c(re, im)
 			switch mode {
 			case "magnitude": t.y[i] = mag
 			case "real-imag": t.y[i] = re

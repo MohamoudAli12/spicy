@@ -78,6 +78,17 @@ positional :: proc(args: []string) -> []string {
 	return out[:]
 }
 
+// The simulator of a command: --sim, else the schematic's, else the default.
+cli_sim :: proc(sch: ^Schematic, args: []string) -> ^Simulator_Def {
+	id := sch.simulator if len(sch.simulator) > 0 else S.simulator
+	for a, i in args do if a == "--sim" && i + 1 < len(args) do id = args[i + 1]
+	sim := simulator_def(id)
+	if sim == nil {
+		cli_fail(EXIT_USAGE, "usage", fmt.tprintf("unknown simulator \"%s\" (spicy --list simulators)", id))
+	}
+	return sim
+}
+
 @(private = "file")
 cli_load :: proc(path: string) -> Schematic {
 	if !file_exists(path) do cli_fail(EXIT_FILE, "file", tcat("no such file: ", path))
@@ -763,7 +774,7 @@ cli_trace_stat :: proc(r: ^Run, s: ^Schematic, sim: ^Simulator_Def, expr: string
 	return st
 }
 
-// The command-line commands of this file; false when args[0] is not one of them.
+// Runs the command-line command args[0]; false when it is not one (the GUI opens the files).
 cli_main :: proc(args: []string) -> bool {
 	cmd := args[0]
 	need_file :: proc(args: []string) -> string {
@@ -789,7 +800,18 @@ cli_main :: proc(args: []string) -> bool {
 	case "--list": load_config(); cli_list(args[1:])
 	case "--run": load_config(); cli_netlist_or_run(need_file(args), false, args[2:])
 	case "--netlist": load_config(); cli_netlist_or_run(need_file(args), true, args[2:])
-	case: return false
+	case:
+		// the commands that print text (cli_text.odin): errors as text too, unless asked otherwise
+		if !out_fmt_given do out_fmt = .Text
+		switch cmd {
+		case "--diagnostics", "--diag": load_config(); fmt.print(diagnostics_report())
+		case "--check-config": load_config(); cli_check_config()
+		case "--set-program": load_config(); cli_set_program(args)
+		case "--embed": load_config(); cli_embed(args)
+		case "--import-model", "--check-model": load_config(); cli_import_model(args)
+		case "--import-asc": load_config(); cli_import_asc(args)
+		case: return false
+		}
 	}
 	return true
 }

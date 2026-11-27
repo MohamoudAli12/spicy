@@ -265,6 +265,6 @@ open_external :: proc(target: string) -> bool {
 	return err == nil
 }
 
-sqrt64 :: proc(x: f64) -> f64 {return math.sqrt(x)}
-
+// Magnitude and phase (degrees) of a complex value.
+abs_c :: proc(re, im: f64) -> f64 {return math.sqrt(re * re + im * im)}
 phase_deg :: proc(re, im: f64) -> f64 {return math.to_degrees(math.atan2(im, re))}

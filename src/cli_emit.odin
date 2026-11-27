@@ -11,6 +11,7 @@ import "core:strings"
 
 Out_Fmt :: enum u8 {Edn, Json, Text}
 out_fmt: Out_Fmt
+out_fmt_given: bool // --edn, --json or --text was on the command line
 
 EXIT_OK :: 0
 EXIT_PROBLEMS :: 1 // the command ran, the result is "no": a check found errors, a run failed
@@ -30,9 +31,9 @@ out_fmt_parse :: proc(args: []string) -> []string {
 	out := make([dynamic]string, context.temp_allocator)
 	for a in args {
 		switch a {
-		case "--edn": out_fmt = .Edn
-		case "--json": out_fmt = .Json
-		case "--text": out_fmt = .Text
+		case "--edn": out_fmt, out_fmt_given = .Edn, true
+		case "--json": out_fmt, out_fmt_given = .Json, true
+		case "--text": out_fmt, out_fmt_given = .Text, true
 		case: append(&out, a)
 		}
 	}

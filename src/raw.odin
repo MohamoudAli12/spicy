@@ -1,6 +1,7 @@
 package spicy
 
 import "core:fmt"
+import "core:log"
 import "core:mem"
 import "core:strconv"
 import "core:strings"
@@ -204,4 +205,26 @@ read_f64 :: proc(d: []u8, off: int) -> f64 {
 	v: f64
 	mem.copy(&v, &d[off], 8)
 	return v
+}
+
+// Writes one plot as CSV (complex values as magnitude and phase).
+write_csv :: proc(p: ^Plot, path: string) -> bool {
+	b := strings.builder_make(context.temp_allocator)
+	for v, k in p.vecs {
+		if k > 0 do strings.write_byte(&b, ',')
+		if p.complex && k > 0 do fmt.sbprintf(&b, "\"mag(%s)\",\"ph(%s)\"", v.name, v.name)
+		else do fmt.sbprintf(&b, "\"%s\"", v.name)
+	}
+	strings.write_byte(&b, '\n')
+	for i in 0 ..< p.npoints {
+		for v, k in p.vecs {
+			if k > 0 do strings.write_byte(&b, ',')
+			if p.complex && k > 0 do fmt.sbprintf(&b, "%.12g,%.6g", abs_c(v.re[i], v.im[i]), phase_deg(v.re[i], v.im[i]))
+			else do fmt.sbprintf(&b, "%.12g", v.re[i])
+		}
+		strings.write_byte(&b, '\n')
+	}
+	if !write_text(path, strings.to_string(b)) do return false
+	log.infof("wrote %s", path)
+	return true
 }
