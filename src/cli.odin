@@ -423,13 +423,6 @@ headless_doc :: proc(s: ^Schematic) -> ^Doc {
 	return d
 }
 
-@(private = "file")
-on_segment :: proc(p, a, b: P) -> bool {
-	if a.x == b.x do return p.x == a.x && p.y > min(a.y, b.y) && p.y < max(a.y, b.y)
-	if a.y == b.y do return p.y == a.y && p.x > min(a.x, b.x) && p.x < max(a.x, b.x)
-	return false
-}
-
 // A straight wire a–b touches nothing else on its way (no pin, wire end, label, or wire along it).
 @(private = "file")
 path_clear :: proc(s: ^Schematic, a, b: P) -> bool {
@@ -437,12 +430,12 @@ path_clear :: proc(s: ^Schematic, a, b: P) -> bool {
 	for &c in s.comps {
 		sym := symbol_find(c.sym)
 		if sym == nil do continue
-		for k in 0 ..< len(sym.pins) do if on_segment(comp_pin(&c, sym, k), a, b) do return false
+		for k in 0 ..< len(sym.pins) do if in_segment(comp_pin(&c, sym, k), a, b) do return false
 	}
 	for w in s.wires {
-		if on_segment(w.a, a, b) || on_segment(w.b, a, b) || on_segment(a, w.a, w.b) || on_segment(b, w.a, w.b) do return false
+		if in_segment(w.a, a, b) || in_segment(w.b, a, b) || in_segment(a, w.a, w.b) || in_segment(b, w.a, w.b) do return false
 	}
-	for f in s.flags do if on_segment(f.pos, a, b) do return false
+	for f in s.flags do if in_segment(f.pos, a, b) do return false
 	return true
 }
 

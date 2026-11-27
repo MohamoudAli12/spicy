@@ -108,7 +108,7 @@ nonideal_lines :: proc(nl: ^Netlist, c: ^Comp, sym: ^Symbol, nodes: []string, va
 	// a V source is its own current)
 	if !vacask && !is_src {
 		sn := fmt.tprintf("n_%s_s", lref)
-		fmt.sbprintf(&b, "vsns_%s_%s %s %s 0\n", lref, sense_pin_name(sym.pins[0].name), a, sn)
+		fmt.sbprintf(&b, "%s %s %s 0\n", sense_source(c.ref, sym.pins[0].name), a, sn)
 		a = sn
 	}
 	elem :: proc(b: ^strings.Builder, kind: u8, ref, key, n1, n2, val: string, vacask: bool, needs: ^[dynamic]string) {

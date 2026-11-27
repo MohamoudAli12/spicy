@@ -100,11 +100,6 @@ add_item :: proc(rep: ^Repair_Report, k: Repair_Kind, n: int, part, detail: stri
 	else do append(&rep.fixes, it)
 }
 
-@(private = "file")
-is_ident_start :: proc(c: u8) -> bool {return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'}
-@(private = "file")
-is_ident_char :: proc(c: u8) -> bool {return is_ident_start(c) || (c >= '0' && c <= '9')}
-
 // A circuit element line ("Q1 c b e QX"): a name, then nodes. Vendor label lines ("Inc. BJTs",
 // "BJTs - Single device of dual", "Transistor") are not.
 element_like :: proc(t: string) -> bool {
@@ -124,13 +119,7 @@ model_candidates :: proc(t: string) -> []string {
 	f := strings.fields(replace_parens(t), context.temp_allocator)
 	out := make([dynamic]string, context.temp_allocator)
 	if len(f) < 3 do return out[:]
-	from := 0
-	switch f[0][0] | 0x20 {
-	case 'q': from = 4
-	case 'd': from = 3
-	case 'm': from = 5
-	case 'j': from = 4
-	case 'x':
+	if f[0][0] | 0x20 == 'x' {
 		// the last word that is not a parameter
 		for k := len(f) - 1; k >= 2; k -= 1 {
 			if strings.contains_rune(f[k], '=') || f[k] == "=" || (k + 1 < len(f) && f[k + 1] == "=") do continue
@@ -139,8 +128,9 @@ model_candidates :: proc(t: string) -> []string {
 			break
 		}
 		return out[:]
-	case: return out[:]
 	}
+	from := element_model_field(f[0][0])
+	if from == 0 do return out[:]
 	for k in from ..< len(f) {
 		x := f[k]
 		if x == "=" || (k + 1 < len(f) && f[k + 1] == "=") do break // the parameters start
@@ -173,22 +163,9 @@ is_numeric_name :: proc(s: string) -> bool {
 	return true
 }
 
-// A model card's lines from k: the "+" lines (comment lines between them included). end: after it.
+// The end of the model card at L[k] (spice_text.odin's card_end on repair lines).
 @(private = "file")
-card_end :: proc(L: []Rline, k: int) -> int {
-	m := k + 1
-	for m < len(L) {
-		t := L[m].text
-		if len(t) > 0 && t[0] == '+' {m += 1; continue}
-		if len(t) == 0 || t[0] == '*' {
-			j := m
-			for j < len(L) && (len(L[j].text) == 0 || L[j].text[0] == '*') do j += 1
-			if j < len(L) && len(L[j].text) > 0 && L[j].text[0] == '+' {m = j; continue}
-		}
-		break
-	}
-	return m
-}
+rcard_end :: proc(L: []Rline, k: int) -> int {return card_end(L, k, proc(l: Rline) -> string {return l.text})}
 
 // Token spans of a line: runs of anything but spaces, tabs and parentheses.
 @(private = "file")
@@ -445,7 +422,7 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 					if len(f) < 2 do break
 					nm := lower(f[1])
 					if count[nm] < 2 || !refs[nm] || here[nm] do break
-					e := card_end(L[:], m)
+					e := rcard_end(L[:], m)
 					for q in m ..< e {
 						append(&out, L[q])
 						moved[q] = true
@@ -480,7 +457,7 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 			i += 1
 			continue
 		}
-		m := card_end(L[:], i)
+		m := rcard_end(L[:], i)
 		card := make([dynamic]Rline)
 		for k in i ..< m {
 			x := L[k].text
@@ -687,13 +664,8 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 		// the model's place on the element line (a number there is what the vendor meant)
 		for &l in L {
 			if !element_like(l.text) do continue
-			from := 0
-			switch l.text[0] | 0x20 {
-			case 'q', 'j': from = 4
-			case 'd': from = 3
-			case 'm': from = 4
-			case: continue
-			}
+			from := element_model_field(l.text[0])
+			if from == 0 do continue
 			f := strings.fields(l.text, context.temp_allocator)
 			for k in from ..< len(f) {
 				if strings.contains_rune(f[k], '=') do break
@@ -795,20 +767,21 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 	return strings.to_string(b), rep
 }
 
+// How many items there are of each kind.
+@(private = "file")
+repair_counts :: proc(items: []Repair_Item) -> (c: [Repair_Kind]int) {
+	for it in items do c[it.kind] += 1
+	return
+}
+
 // The report for the import dialog and the command line: a summary per kind, then each place.
 repair_report_text :: proc(rep: ^Repair_Report) -> string {
 	context.allocator = context.temp_allocator
 	b := strings.builder_make()
-	count :: proc(items: []Repair_Item) -> [Repair_Kind]int {
-		c: [Repair_Kind]int
-		for it in items do c[it.kind] += 1
-		return c
-	}
 	section :: proc(b: ^strings.Builder, head: string, items: []Repair_Item) {
 		if len(items) == 0 do return
 		fmt.sbprintf(b, "%s\n", head)
-		c := count(items)
-		for n, k in c do if n > 0 {
+		for n, k in repair_counts(items) do if n > 0 {
 			num := fmt.tprintf("%d", n)
 			fmt.sbprintf(b, "  %s%s  %s\n", strings.repeat(" ", max(0, 5 - len(num))), num, repair_kind_text(k))
 		}
@@ -836,9 +809,7 @@ repair_header :: proc(rep: ^Repair_Report, src: string) -> string {
 	context.allocator = context.temp_allocator
 	b := strings.builder_make()
 	fmt.sbprintf(&b, "* Repaired by spicy when imported from %s (the original is unchanged):\n", base_name(src))
-	c: [Repair_Kind]int
-	for it in rep.fixes do c[it.kind] += 1
-	for n, k in c do if n > 0 do fmt.sbprintf(&b, "*   %d %s\n", n, repair_kind_text(k))
+	for n, k in repair_counts(rep.fixes[:]) do if n > 0 do fmt.sbprintf(&b, "*   %d %s\n", n, repair_kind_text(k))
 	if len(rep.checks) > 0 do fmt.sbprintf(&b, "* Not changed, to check: %d (spicy --check-model on the original lists them)\n", len(rep.checks))
 	strings.write_string(&b, "*\n")
 	return strings.to_string(b)

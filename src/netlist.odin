@@ -57,23 +57,15 @@ parse_lib_into :: proc(list: ^[dynamic]Lib_Entry, text, src: string) {
 		if strings.has_prefix(low, ".model") {
 			card := strings.builder_make(context.temp_allocator)
 			strings.write_string(&card, l)
-			j := i + 1
-			for j < len(lines) {
-				t := strings.trim_space(lines[j])
-				if !strings.has_prefix(t, "+") {
-					// blank and comment lines between the "+" lines (as SPICE reads them)
-					if len(t) > 0 && t[0] != '*' do break
-					k := j
-					for k < len(lines) && (len(strings.trim_space(lines[k])) == 0 || strings.trim_space(lines[k])[0] == '*') do k += 1
-					if k >= len(lines) || !strings.has_prefix(strings.trim_space(lines[k]), "+") do break
-					j = k
-					continue
-				}
+			// its "+" lines (blank and comment lines between them are skipped, as SPICE reads them)
+			j := card_end(lines, i, proc(l: string) -> string {return strings.trim_space(l)})
+			for k in i + 1 ..< j {
+				t := strings.trim_space(lines[k])
+				if !strings.has_prefix(t, "+") do continue
 				strings.write_byte(&card, '\n')
 				// "+NK=0.7" as "+ NK=0.7": the parameter on its own
 				strings.write_string(&card, "+ ")
 				strings.write_string(&card, strings.trim_space(t[1:]))
-				j += 1
 			}
 			full := strings.to_string(card)
 			f := strings.fields(replace_parens(full), context.temp_allocator)
@@ -104,13 +96,6 @@ parse_lib_into :: proc(list: ^[dynamic]Lib_Entry, text, src: string) {
 		}
 		i += 1
 	}
-}
-
-replace_parens :: proc(s: string) -> string {
-	r, _ := strings.replace_all(s, "(", " ", context.temp_allocator)
-	r, _ = strings.replace_all(r, ")", " ", context.temp_allocator)
-	r, _ = strings.replace_all(r, "=", " = ", context.temp_allocator)
-	return r
 }
 
 lib_find :: proc(name: string) -> ^Lib_Entry {
@@ -337,17 +322,6 @@ directive_lines :: proc(s: ^Schematic, sim: ^Simulator_Def) -> []string {
 	return out[:]
 }
 
-// Model names defined by .model / .subckt lines.
-@(private = "file")
-defined_names :: proc(lines: []string) -> map[string]bool {
-	m := make(map[string]bool, 16, context.temp_allocator)
-	for l in lines {
-		f := strings.fields(replace_parens(l), context.temp_allocator)
-		if len(f) >= 2 && (lower(f[0]) == ".model" || lower(f[0]) == ".subckt") do m[lower(f[1])] = true
-	}
-	return m
-}
-
 @(private = "file")
 check_pins :: proc(nl: ^Netlist, s: ^Schematic) {
 	for &c in s.comps {
@@ -437,11 +411,11 @@ netlist_spice :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: s
 		}
 	}
 	dl := directive_lines(s, sim)
-	defined := defined_names(dl)
+	defined := card_names(dl)
 	for &e in nl.local do if !entry_is_embedded(&e) do defined[e.name] = true // in the directives or the files they include
 	for name in used_syms {
 		sym := symbol_find(name)
-		if len(sym.defs) > 0 do for k, v in defined_names(split_lines(sym.defs)) do defined[k] = v
+		if len(sym.defs) > 0 do for k, v in card_names(split_lines(sym.defs)) do defined[k] = v
 	}
 	cards, defaults := needed_models(s, defined, nl.local)
 	emitted := make(map[string]bool, 16, context.temp_allocator)
@@ -544,18 +518,7 @@ sim_is_ngspice :: proc(sim: ^Simulator_Def) -> bool {
 // written for PSpice): VSWITCH / ISWITCH models, TEMP in expressions, VALUE / TABLE / LAPLACE
 // sources. "" when there is none.
 pspice_feature :: proc(text: string, base_dir := "", depth := 0) -> string {
-	// cards with their "+" continuation lines joined
-	cards := make([dynamic]string, context.temp_allocator)
-	for raw in split_lines(text) {
-		l := strings.trim_space(raw)
-		if len(l) == 0 || l[0] == '*' do continue
-		if l[0] == '+' && len(cards) > 0 {
-			cards[len(cards) - 1] = tcat(cards[len(cards) - 1], " ", l[1:])
-			continue
-		}
-		append(&cards, l)
-	}
-	for l in cards {
+	for l in spice_cards(text) {
 		low := lower(l)
 		// the files it .include's (their paths are absolute in a netlist spicy wrote)
 		if p, inc := include_path(l, base_dir); inc {
@@ -578,8 +541,8 @@ pspice_feature :: proc(text: string, base_dir := "", depth := 0) -> string {
 			if j < 0 do break
 			expr := low[i + 1:i + j]
 			for k := strings.index(expr, "temp"); k >= 0; {
-				before := k == 0 || !is_word_byte(expr[k - 1])
-				after := k + 4 >= len(expr) || !is_word_byte(expr[k + 4])
+				before := k == 0 || !is_ident_char(expr[k - 1])
+				after := k + 4 >= len(expr) || !is_ident_char(expr[k + 4])
 				if before && after do return "TEMP in expressions"
 				nk := strings.index(expr[k + 4:], "temp")
 				k = k + 4 + nk if nk >= 0 else -1
@@ -594,9 +557,6 @@ pspice_feature :: proc(text: string, base_dir := "", depth := 0) -> string {
 	}
 	return ""
 }
-
-@(private = "file")
-is_word_byte :: proc(b: u8) -> bool {return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_'}
 
 xyce_fixups :: proc(text: string) -> string {
 	fx: Xyce_Fix
@@ -644,22 +604,6 @@ Xyce_Fix :: struct {
 	own_timeint: bool, // the netlist sets Xyce's time integration options itself
 }
 
-// "k = v" pairs of a card from word `from` on (keys in lower case; flags without a value
-// are left out).
-@(private = "file")
-card_params :: proc(f: []string, from: int) -> (keys, vals: [dynamic]string) {
-	keys = make([dynamic]string, context.temp_allocator)
-	vals = make([dynamic]string, context.temp_allocator)
-	for i := from; i < len(f); {
-		if i + 2 < len(f) && f[i + 1] == "=" {
-			append(&keys, lower(f[i]))
-			append(&vals, f[i + 2])
-			i += 3
-		} else do i += 1
-	}
-	return
-}
-
 // ngspice's SW / CSW switch models as Xyce's VSWITCH / ISWITCH. ngspice switches abruptly at
 // VT ± VH (with hysteresis); Xyce goes smoothly from VOFF to VON, so VON = VT + |VH| and
 // VOFF = VT - |VH|, a little apart when there is no hysteresis.
@@ -670,7 +614,7 @@ xyce_model :: proc(l: string, fx: ^Xyce_Fix) -> string {
 	typ := lower(f[2])
 	if typ != "sw" && typ != "csw" do return l
 	fx.switches = true
-	keys, vals := card_params(f, 3)
+	keys, vals, _ := card_params(f, 3)
 	th, hy := "vt", "vh"
 	on, off := "VON", "VOFF"
 	if typ == "csw" do th, hy, on, off = "it", "ih", "ION", "IOFF"
@@ -715,7 +659,7 @@ xyce_options :: proc(l: string, fx: ^Xyce_Fix) -> string {
 		if w == "timeint" do fx.own_timeint = true
 		for pk in ([?]string{"timeint", "device", "nonlin", "nonlin-tran", "nonlin-hb", "linsol", "linsol-hb", "output", "restart", "hbint", "parser", "measure", "sensitivity", "diagnostic"}) do if w == pk do return l
 	}
-	keys, vals := card_params(f, 1)
+	keys, vals, flags := card_params(f, 1)
 	timeint := make([dynamic]string, context.temp_allocator)
 	device := make([dynamic]string, context.temp_allocator)
 	dropped := make([dynamic]string, context.temp_allocator)
@@ -727,12 +671,7 @@ xyce_options :: proc(l: string, fx: ^Xyce_Fix) -> string {
 		case: append(&dropped, kv)
 		}
 	}
-	// flags such as savecurrents
-	for i := 1; i < len(f); i += 1 {
-		if f[i] == "=" {i += 1; continue}
-		if i + 1 < len(f) && f[i + 1] == "=" do continue
-		append(&dropped, f[i])
-	}
+	append(&dropped, ..flags[:]) // such as savecurrents
 	b := strings.builder_make(context.temp_allocator)
 	if len(timeint) > 0 do fmt.sbprintf(&b, ".options timeint %s\n", strings.join(timeint[:], " ", context.temp_allocator))
 	if len(device) > 0 do fmt.sbprintf(&b, ".options device %s\n", strings.join(device[:], " ", context.temp_allocator))
@@ -748,7 +687,7 @@ xyce_options :: proc(l: string, fx: ^Xyce_Fix) -> string {
 @(private = "file")
 vacask_options :: proc(nl: ^Netlist, l: string, opts: ^[dynamic][2]string) {
 	f := strings.fields(replace_parens(l), context.temp_allocator)
-	keys, vals := card_params(f, 1)
+	keys, vals, flags := card_params(f, 1)
 	dropped := make([dynamic]string, context.temp_allocator)
 	for k, i in keys {
 		v := vals[i]
@@ -770,12 +709,7 @@ vacask_options :: proc(nl: ^Netlist, l: string, opts: ^[dynamic][2]string) {
 		}
 		set_option(opts, name, v)
 	}
-	// flags such as savecurrents
-	for i := 1; i < len(f); i += 1 {
-		if f[i] == "=" {i += 1; continue}
-		if i + 1 < len(f) && f[i + 1] == "=" do continue
-		append(&dropped, f[i])
-	}
+	append(&dropped, ..flags[:]) // such as savecurrents
 	if len(dropped) > 0 do append(&nl.warnings, fmt.tprintf("VACASK has no option like %s (left out)", strings.join(dropped[:], " ", context.temp_allocator)))
 }
 
@@ -794,49 +728,17 @@ vacask_value :: proc(v: string) -> string {
 	return t
 }
 
-// "10k", "4.7u", "1Meg", "2.2nF", "1e-6" – a number with an optional SI prefix and unit letters.
-is_number_token :: proc(t: string) -> bool {
-	i := 0
-	if i < len(t) && (t[i] == '+' || t[i] == '-') do i += 1
-	digits := false
-	for i < len(t) && t[i] >= '0' && t[i] <= '9' {i += 1; digits = true}
-	if i < len(t) && t[i] == '.' {
-		i += 1
-		for i < len(t) && t[i] >= '0' && t[i] <= '9' {i += 1; digits = true}
-	}
-	if !digits do return false
-	if i < len(t) && (t[i] == 'e' || t[i] == 'E') {
-		j := i + 1
-		if j < len(t) && (t[j] == '+' || t[j] == '-') do j += 1
-		if j < len(t) && t[j] >= '0' && t[j] <= '9' {
-			for j < len(t) && t[j] >= '0' && t[j] <= '9' do j += 1
-			i = j
-		}
-	}
-	// prefix and unit: letters only (µ allowed)
-	for ch in t[i:] {
-		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == 'µ' || ch == 'μ' || ch == '%' || ch == 'Ω') do return false
-	}
-	return true
-}
-
 // Model names for VACASK: lower case, and never starting with a digit ("1N4148" would read as 1n).
 vacask_name :: proc(n: string) -> string {
 	l := lower(n)
 	// VACASK names are identifiers: "di_bc807-16" and "s1g-13-f" with '_' for the rest
 	if !is_identifier(l) {
 		b := transmute([]u8)strings.clone(l, context.temp_allocator)
-		for &ch in b do if !((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_') do ch = '_'
+		for &ch in b do if !is_ident_char(ch) do ch = '_'
 		l = string(b)
 	}
 	if len(l) > 0 && l[0] >= '0' && l[0] <= '9' do return tcat("m_", l)
 	return l
-}
-
-is_identifier :: proc(t: string) -> bool {
-	if len(t) == 0 do return false
-	for ch in t do if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_') do return false
-	return true
 }
 
 // Splits "PULSE(0 1 0 1n 1n 5u 10u) AC 1" into tokens, with function arguments grouped.
@@ -948,7 +850,12 @@ sanitize :: proc(s: string) -> string {
 	return strings.to_string(b)
 }
 
-sense_pin_name :: proc(pin: string) -> string {return sanitize(pin)}
+// The 0 V sources spicy puts in series with a pin to measure its current: the source
+// vsns_<ref>_<pin> runs from the pin's net to the node <ref>_<pin>, which the pin then
+// connects to (lower case, the pin name made an identifier by sanitize). The probe
+// templates of settings.edn ("vsns_{ref}_{pin}:flow(br)") name them the same way.
+sense_node :: proc(ref, pin: string) -> string {return tcat(lower(ref), "_", sanitize(pin))}
+sense_source :: proc(ref, pin: string) -> string {return tcat("vsns_", sense_node(ref, pin))}
 
 // The pins of a part that get a VACASK sense source (two-pin parts: the first pin).
 vacask_sensed :: proc(sym: ^Symbol, sim: ^Simulator_Def) -> int {
@@ -1089,10 +996,6 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 	body := strings.builder_make(context.temp_allocator)
 	loads := make([dynamic]string, context.temp_allocator)
 	models := make([dynamic]string, context.temp_allocator)
-	add_unique :: proc(list: ^[dynamic]string, x: string) {
-		for y in list do if y == x do return
-		append(list, x)
-	}
 	check_pins(nl, s)
 	used := make(map[string]bool, 16, context.temp_allocator)
 	sub_needed := make([dynamic]^Lib_Entry, context.temp_allocator)
@@ -1124,8 +1027,8 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 		// sense sources in series with the pins
 		ns := vacask_sensed(sym, sim)
 		for k in 0 ..< ns {
-			inner := fmt.tprintf("%s_%s", lower(c.ref), sense_pin_name(sym.pins[k].name))
-			fmt.sbprintf(&body, "vsns_%s (%s %s) vsource dc=0\n", inner, nodes[k], inner)
+			inner := sense_node(c.ref, sym.pins[k].name)
+			fmt.sbprintf(&body, "%s (%s %s) vsource dc=0\n", sense_source(c.ref, sym.pins[k].name), nodes[k], inner)
 			nodes[k] = inner
 		}
 		if ns > 0 do add_unique(&models, "model vsource vsource")
@@ -1488,9 +1391,8 @@ spice_subckt_instance :: proc(nl: ^Netlist, b: ^strings.Builder, c: ^Comp, sym: 
 		used := make([]bool, len(nodes), context.temp_allocator)
 		for k in order do used[k] = true
 		for k in 0 ..< len(nodes) do if used[k] {
-			n := fmt.tprintf("%s_%s", lower(c.ref), sense_pin_name(sym.pins[k].name))
-			fmt.sbprintf(b, "Vsns_%s %s %s 0\n", n, nodes[k], n)
-			inner[k] = n
+			inner[k] = sense_node(c.ref, sym.pins[k].name)
+			fmt.sbprintf(b, "%s %s %s 0\n", sense_source(c.ref, sym.pins[k].name), nodes[k], inner[k])
 		}
 	}
 	inst := c.ref if len(c.ref) > 0 && (c.ref[0] == 'X' || c.ref[0] == 'x') else tcat("X", c.ref)

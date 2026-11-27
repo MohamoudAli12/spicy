@@ -19,7 +19,7 @@ is_netlist_ext :: proc(path: string) -> bool {
 
 // A circuit (element lines outside .subckt blocks), not just a model library.
 is_circuit_netlist :: proc(text: string) -> bool {
-	lines := logical_lines(text)
+	lines := spice_lines(text)
 	// a file with models or subcircuits and no analysis is a library, even when a vendor's label
 	// line ("SDM2U30CSP Spice Model v1.0 …") or a misspelt ".SUBCKET" looks like an element
 	defines, analysis := false, false
@@ -75,7 +75,7 @@ netlist_import :: proc(text: string) -> (s: Schematic, warnings: [dynamic]string
 	}
 	directives := make([dynamic]string, context.temp_allocator)
 	parts := make([dynamic]Placed, context.temp_allocator)
-	lines := logical_lines(strings.join(raw[1:], "\n", context.temp_allocator))
+	lines := spice_lines(strings.join(raw[1:], "\n", context.temp_allocator))
 	in_block := "" // ".subckt" or ".control": copied as they are
 	for l in lines {
 		low := lower(l)

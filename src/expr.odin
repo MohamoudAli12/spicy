@@ -425,7 +425,7 @@ probe_current :: proc(p: ^Parser, tag, ref: string) -> Expr_Val {
 	}
 	append(&cands, tcat("i(", ref, ")"), tcat("i(@", lower(ref), "[i", tag, "])"), tcat(lower(ref), ":flow(br)"), tcat(ref, "#branch"))
 	// VACASK: the sense source spicy puts at the first node of an R, C, L or D written in a directive
-	append(&cands, tcat("vsns_", lower(ref), "_1:flow(br)"))
+	append(&cands, tcat(sense_source(ref, "1"), ":flow(br)"))
 	found: ^Vec
 	found_name := ""
 	for c in cands do if v := vec_find(p.ctx.plot, c); v != nil {found, found_name = v, c; break}
@@ -538,32 +538,32 @@ current_vector_names :: proc(sim: ^Simulator_Def, c: ^Comp, sym: ^Symbol, tag: s
 		lel := lower(el)
 		append(&out, probe_name(sim.current, el, el, "", ""), probe_name(sim.current, lel, lel, "", ""), tcat(lel, "#branch"))
 		// VACASK: the sense source at the pin
-		pin := sense_pin_name(pd.name)
+		pin := sanitize(pd.name)
 		append(&out, probe_name(sim.pin_current, ref, ref, pd.cur, pin), probe_name(sim.pin_current, lref, lref, pd.cur, pin))
 		return out[:]
 	}
 	// a part with non-ideal values: the 0 V source at its first pin (SPICE; VACASK's
 	// sense source has the same name)
 	if len(tag) == 0 && sym.probe != "source" && len(sym.pins) > 0 && nonideal_active(c, sym) {
-		sn := tcat("vsns_", lref, "_", sense_pin_name(sym.pins[0].name))
+		sn := sense_source(ref, sym.pins[0].name)
 		append(&out, tcat("i(", sn, ")"), tcat(sn, "#branch"))
 	}
 	if len(tag) == 0 {
 		if sym.probe == "source" {
 			append(&out, probe_name(sim.source_current, ref, ref, "", ""), probe_name(sim.source_current, lref, lref, "", ""))
 		} else {
-			pin := sense_pin_name(sym.pins[0].name) if len(sym.pins) > 0 else ""
+			pin := sanitize(sym.pins[0].name) if len(sym.pins) > 0 else ""
 			append(&out, probe_name(sim.current, ref, ref, sym.cur, pin), probe_name(sim.current, lref, lref, sym.cur, pin))
 			// a part that is a subcircuit instance: the sense source spicy puts at its pin
-			if len(pin) > 0 do append(&out, tcat("i(vsns_", lref, "_", pin, ")"))
+			if len(pin) > 0 do append(&out, tcat("i(", sense_source(ref, sym.pins[0].name), ")"))
 		}
 		return out[:]
 	}
 	for pd in sym.pins {
 		if strings.equal_fold(pd.cur, tag) || strings.equal_fold(pd.name, tag) {
-			pin := sense_pin_name(pd.name)
+			pin := sanitize(pd.name)
 			append(&out, probe_name(sim.pin_current, ref, ref, pd.cur, pin), probe_name(sim.pin_current, lref, lref, pd.cur, pin))
-			append(&out, tcat("i(vsns_", lref, "_", pin, ")"))
+			append(&out, tcat("i(", sense_source(ref, pd.name), ")"))
 		}
 	}
 	return out[:]

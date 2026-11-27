@@ -16,24 +16,8 @@ import "core:strings"
 // SPICE style: suffixes are case-insensitive, "m" = milli, "meg" = mega.
 parse_eng :: proc(s: string) -> (f64, bool) {
 	t := strings.trim_space(s)
-	if len(t) == 0 do return 0, false
-	i := 0
-	if i < len(t) && (t[i] == '+' || t[i] == '-') do i += 1
-	digits := false
-	for i < len(t) && (t[i] >= '0' && t[i] <= '9') {i += 1; digits = true}
-	if i < len(t) && t[i] == '.' {
-		i += 1
-		for i < len(t) && (t[i] >= '0' && t[i] <= '9') {i += 1; digits = true}
-	}
-	if !digits do return 0, false
-	if i < len(t) && (t[i] == 'e' || t[i] == 'E') {
-		j := i + 1
-		if j < len(t) && (t[j] == '+' || t[j] == '-') do j += 1
-		if j < len(t) && t[j] >= '0' && t[j] <= '9' {
-			for j < len(t) && t[j] >= '0' && t[j] <= '9' do j += 1
-			i = j
-		}
-	}
+	i, is_num := scan_number(t)
+	if !is_num do return 0, false
 	v, ok := strconv.parse_f64(t[:i])
 	if !ok do return 0, false
 	rest := strings.trim_space(t[i:])
@@ -55,6 +39,29 @@ parse_eng :: proc(s: string) -> (f64, bool) {
 	case low[0] == '%': mult = 0.01
 	}
 	return v * mult, true
+}
+
+// The number at the start of t: an optional sign, digits with an optional ".", an optional
+// exponent ("e-6"). end: where it stops; ok false when there are no digits.
+scan_number :: proc(t: string) -> (end: int, ok: bool) {
+	i := 0
+	if i < len(t) && (t[i] == '+' || t[i] == '-') do i += 1
+	digits := false
+	for i < len(t) && t[i] >= '0' && t[i] <= '9' {i += 1; digits = true}
+	if i < len(t) && t[i] == '.' {
+		i += 1
+		for i < len(t) && t[i] >= '0' && t[i] <= '9' {i += 1; digits = true}
+	}
+	if !digits do return 0, false
+	if i < len(t) && (t[i] == 'e' || t[i] == 'E') {
+		j := i + 1
+		if j < len(t) && (t[j] == '+' || t[j] == '-') do j += 1
+		if j < len(t) && t[j] >= '0' && t[j] <= '9' {
+			for j < len(t) && t[j] >= '0' && t[j] <= '9' do j += 1
+			i = j
+		}
+	}
+	return i, true
 }
 
 ENG_PREFIX := [?]string{"a", "f", "p", "n", "µ", "m", "", "k", "M", "G", "T"}
@@ -123,6 +130,22 @@ one_line :: proc(s: string) -> string {
 	t, _ = strings.replace_all(t, "\n", " ", context.temp_allocator)
 	t, _ = strings.replace_all(t, "\r", " ", context.temp_allocator)
 	return strings.trim_right_space(t)
+}
+
+is_ident_start :: proc(c: u8) -> bool {return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'}
+is_ident_char :: proc(c: u8) -> bool {return is_ident_start(c) || (c >= '0' && c <= '9')}
+
+// Letters, digits and "_" only (a digit first is allowed: "1n4148").
+is_identifier :: proc(t: string) -> bool {
+	if len(t) == 0 do return false
+	for i in 0 ..< len(t) do if !is_ident_char(t[i]) do return false
+	return true
+}
+
+// Appends x unless the list has it already.
+add_unique :: proc(list: ^[dynamic]string, x: string) {
+	for y in list do if y == x do return
+	append(list, x)
 }
 
 // Replaces s (a heap string) with a heap copy of v.
