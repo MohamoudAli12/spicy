@@ -251,8 +251,10 @@ parse_primary :: proc(p: ^Parser) -> Expr_Val {
 		end := match_paren(p.src, p.pos)
 		if end < 0 do return fail(p, "missing )")
 		full := p.src[start:end]
-		// a raw vector name like v(out) or i(@r1[i])
-		if v := vec_find(p.ctx.plot, full); v != nil {
+		// a raw vector name like v(out) or i(@r1[i]); not I(C1) of a part with non-ideal
+		// values (Xyce's I(C1) is the bare element's, not the current at its pins)
+		pin_cur := (name == "i" || name == "I") && comp_nonideal(p.ctx.sch, strings.trim_space(p.src[p.pos + 1:end - 1]))
+		if v := vec_find(p.ctx.plot, full); v != nil && !pin_cur {
 			p.pos = end
 			return vec_val(p, v)
 		}
@@ -451,6 +453,7 @@ passive_ac_current :: proc(p: ^Parser, ref: string) -> (Expr_Val, bool) {
 		if sym == nil || len(sym.pins) != 2 do return {}, false
 		kind := upper(sym.prefix)
 		if kind != "R" && kind != "C" && kind != "L" do return {}, false
+		if nonideal_active(&c, sym) do return {}, false // its pins see more than the bare element
 		x, ok := parse_eng(strings.trim_space(c.value))
 		if !ok || x == 0 do return {}, false
 		err0 := p.ctx.err
@@ -496,6 +499,12 @@ current_vector_names :: proc(sim: ^Simulator_Def, c: ^Comp, sym: ^Symbol, tag: s
 		pin := sense_pin_name(pd.name)
 		append(&out, probe_name(sim.pin_current, ref, ref, pd.cur, pin), probe_name(sim.pin_current, lref, lref, pd.cur, pin))
 		return out[:]
+	}
+	// a part with non-ideal values: the 0 V source at its first pin (SPICE; VACASK's
+	// sense source has the same name)
+	if len(tag) == 0 && sym.probe != "source" && len(sym.pins) > 0 && nonideal_active(c, sym) {
+		sn := tcat("vsns_", lref, "_", sense_pin_name(sym.pins[0].name))
+		append(&out, tcat("i(", sn, ")"), tcat(sn, "#branch"))
 	}
 	if len(tag) == 0 {
 		if sym.probe == "source" {

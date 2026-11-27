@@ -155,7 +155,6 @@ directive_for :: proc(text: string, sim: ^Simulator_Def) -> (body: string, ok: b
 	return "", false
 }
 
-@(private = "file")
 fill_template :: proc(nl: ^Netlist, tmpl: string, c: ^Comp, sym: ^Symbol, pin_nodes: []string, vacask: bool) -> string {
 	b := strings.builder_make(context.temp_allocator)
 	i := 0
@@ -392,7 +391,8 @@ netlist_spice :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: s
 			spice_subckt_instance(nl, &b, &c, sym, e, nodes)
 			continue
 		}
-		strings.write_string(&b, fill_template(nl, sym.spice, &c, sym, nodes, false))
+		if lines, ok := nonideal_lines(nl, &c, sym, nodes, false); ok do strings.write_string(&b, lines)
+		else do strings.write_string(&b, fill_template(nl, sym.spice, &c, sym, nodes, false))
 		strings.write_byte(&b, '\n')
 		used_syms[sym.name] = true
 	}
@@ -1068,7 +1068,16 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 			line = strings.to_string(ln)
 			append(&sub_needed, sub)
 		} else {
-			line = fill_template(nl, sym.vacask.line, &c, sym, nodes, true)
+			needs := make([dynamic]string, context.temp_allocator)
+			all, has_ni := nonideal_lines(nl, &c, sym, nodes, true, &needs)
+			if !has_ni do all = fill_template(nl, sym.vacask.line, &c, sym, nodes, true)
+			for n in needs do if ns := symbol_find(n); ns != nil {
+				for l in ns.vacask.loads do add_unique(&loads, l)
+				for m in ns.vacask.models do add_unique(&models, m)
+			}
+			out_lines := make([dynamic]string, context.temp_allocator)
+			for line_ in strings.split(all, "\n", context.temp_allocator) {
+			line := line_
 			// SPICE "ic=…" on a C or L: VACASK's devices have no such parameter. With uic the
 			// run starts from 0 V and 0 A anyway, so ic=0 is dropped; other values are not
 			// carried over (a warning says so)
@@ -1094,6 +1103,9 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 				}
 				line = strings.join(kept[:], " ", context.temp_allocator)
 			}
+			append(&out_lines, line)
+			}
+			line = strings.join(out_lines[:], "\n", context.temp_allocator)
 		}
 		strings.write_string(&body, line)
 		strings.write_byte(&body, '\n')

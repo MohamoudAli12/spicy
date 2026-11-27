@@ -348,6 +348,7 @@ on_run_done :: proc(d: ^Doc) {
 	}
 	// first: the .plot and .meas directives may add warnings
 	meas_run(r, &d.sch, doc_sim(d))
+	ratings_check(r, &d.sch, doc_sim(d))
 	wave_new_run(&d.wave, r, &d.sch, doc_sim(d))
 	status(r.message)
 	if len(r.measures) > 0 do status(strings.join(r.measures[:], "  ·  ", context.temp_allocator))

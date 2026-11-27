@@ -633,6 +633,7 @@ cli_netlist_or_run :: proc(path: string, netlist_only: bool, args: []string) {
 		if !write_csv(&r.plots[pi], csv) do cli_fail(EXIT_FILE, "write", tcat("cannot write ", csv))
 	}
 	meas_run(&r, &s, sim)
+	ratings_check(&r, &s, sim)
 	traces := flag_values(args, "--trace")
 	stats := make([dynamic]Trace_Stat, context.temp_allocator)
 	for e in traces do append(&stats, cli_trace_stat(&r, &s, sim, e))

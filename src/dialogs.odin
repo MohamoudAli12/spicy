@@ -25,6 +25,7 @@ Dialog_State :: struct {
 	src_args:        [8]string,
 	src_dc:          string,
 	src_ac:          string,
+	ni_vals:         [8]string, // the part's non-ideal values (nonideal_params)
 	directive:       bool,
 	label_at:        P,
 	label_place_now: bool,
@@ -130,12 +131,15 @@ dialog_part :: proc(d: ^Doc, ci: int) {
 	clear(&dl.attr_keys)
 	clear(&dl.attr_vals)
 	set_str(&dl.pinmap, comp_attr(c, "pinmap"))
-	for a in c.attrs {
+	sym := symbol_find(c.sym)
+	params := nonideal_params(sym)
+	for &v, i in dl.ni_vals do set_str(&v, comp_attr(c, params[i].key) if i < len(params) else "")
+	attrs: for a in c.attrs {
 		if a.key == "pinmap" do continue // its own field
+		for p in params do if p.key == a.key do continue attrs // the non-ideal section
 		append(&dl.attr_keys, strings.clone(a.key))
 		append(&dl.attr_vals, strings.clone(a.val))
 	}
-	sym := symbol_find(c.sym)
 	is_src := sym != nil && sym.editor == "source"
 	if is_src do source_parse(c.value)
 	dl.model_sel = -1
@@ -648,6 +652,9 @@ draw_part_edit :: proc(d: ^Doc) {
 	if len(from) > 0 do h += 34
 	if differs do h += 34
 	if sub != nil do h += 110
+	params := nonideal_params(sym)
+	if sub != nil do params = nil // a subcircuit has its own
+	if len(params) > 0 do h += f32(len(params) + 1) * 34 + 6
 	b := dialog_frame(620, h)
 	title(&b, tcat(c.ref, " – ", sym.desc if sym != nil else c.sym))
 	r := row(&b)
@@ -745,6 +752,15 @@ draw_part_edit :: proc(d: ^Doc) {
 		label_col(&r, "Pin map", 170)
 		text_field("dlg.pinmap", r, &dl.pinmap, tcat("automatic; or the symbol pins in port order, e.g. ", pin_names_of(sym)))
 	}
+	if len(params) > 0 {
+		cut_top(&b, 6)
+		text_in(row(&b), "Non-ideal behaviour – leave empty for an ideal part", th.muted, 0, fs(0.9), 4)
+		for p, i in params {
+			r = row(&b)
+			label_col(&r, p.label, 170)
+			text_field(tcat("dlg.ni", itoa(i)), r, &dl.ni_vals[i], p.hint)
+		}
+	}
 	for k, i in dl.attr_keys {
 		r = row(&b)
 		label_col(&r, k)
@@ -766,6 +782,11 @@ draw_part_edit :: proc(d: ^Doc) {
 		if is_src do set_str(&dl.value, source_build())
 		set_str(&c.value, strings.trim_space(dl.value))
 		for k, i in dl.attr_keys do comp_set_attr(c, k, dl.attr_vals[i])
+		for p, i in params {
+			v := strings.trim_space(dl.ni_vals[i])
+			if len(v) > 0 do comp_set_attr(c, p.key, v)
+			else do comp_remove_attr(c, p.key)
+		}
 		pm := strings.trim_space(dl.pinmap)
 		if len(pm) > 0 do comp_set_attr(c, "pinmap", pm)
 		else do for a, i in c.attrs do if a.key == "pinmap" {

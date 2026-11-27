@@ -103,6 +103,15 @@ comp_set_attr :: proc(c: ^Comp, key, val: string) {
 	append(&c.attrs, Attr{strings.clone(key), strings.clone(val)})
 }
 
+comp_remove_attr :: proc(c: ^Comp, key: string) {
+	for a, i in c.attrs do if a.key == key {
+		delete(a.key)
+		delete(a.val)
+		ordered_remove(&c.attrs, i)
+		return
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Geometry
 
