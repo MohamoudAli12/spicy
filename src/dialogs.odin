@@ -136,10 +136,12 @@ dialog_part :: proc(d: ^Doc, ci: int) {
 		append(&dl.attr_vals, strings.clone(a.val))
 	}
 	sym := symbol_find(c.sym)
-	if sym != nil && sym.editor == "source" do source_parse(c.value)
+	is_src := sym != nil && sym.editor == "source"
+	if is_src do source_parse(c.value)
 	dl.model_sel = -1
 	dialog_open(.Part_Edit)
-	focus_field("dlg.value")
+	// a source has no value field: its value is made from the source editor's fields
+	focus_field("dlg.src.dc" if is_src else "dlg.value")
 }
 
 dialog_label :: proc(d: ^Doc, fi: int) {
@@ -759,6 +761,9 @@ draw_part_edit :: proc(d: ^Doc) {
 		doc_push_undo(d)
 		ref := strings.trim_space(dl.ref)
 		if len(ref) > 0 do set_str(&c.ref, ref)
+		// a source's value is built from its editor's fields now: a field committed by this
+		// Enter (or by the click on OK) was read after the value shown above was made
+		if is_src do set_str(&dl.value, source_build())
 		set_str(&c.value, strings.trim_space(dl.value))
 		for k, i in dl.attr_keys do comp_set_attr(c, k, dl.attr_vals[i])
 		pm := strings.trim_space(dl.pinmap)
