@@ -202,51 +202,79 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 	rep.fixes = make([dynamic]Repair_Item)
 	rep.checks = make([dynamic]Repair_Item)
 
-	// 0. characters, and an .ENDS run onto the end of a card
+	L := repair_split(text, &rep)
+	L = repair_lines(L[:], &rep)
+	L = repair_subckt_ends(L[:], &rep)
+	L = repair_models_after_ends(L[:], &rep)
+	L = repair_model_cards(L[:], &rep)
+	blocks, drop := repair_blocks(L[:], &rep)
+	repair_undefined(L[:], blocks[:], drop, replacing, &rep)
+
+	for len(L) > 0 && len(L[len(L) - 1].text) == 0 do pop(&L)
+	b := strings.builder_make()
+	for l, k in L {
+		if drop[k] do continue
+		strings.write_string(&b, l.text)
+		strings.write_byte(&b, '\n')
+	}
+	return strings.to_string(b), rep
+}
+
+// A card at the top of the file: its lines [start, end), its name, and its text in a normal
+// form (upper case, single spaces, no comments) to find copies.
+Card_Block :: struct {start, end: int, name, key: string}
+
+// Stage 0: characters (µ, non-breaking spaces), and lines that are two: a header run onto a
+// label line, an .ENDS run onto the end of a card.
+@(private = "file")
+repair_split :: proc(text: string, rep: ^Repair_Report) -> [dynamic]Rline {
 	pre := make([dynamic]Rline)
-	{
-		part := ""
-		for raw, i in split_lines(text) {
-			r := raw
-			tt := strings.trim_space(r)
-			if lt := lower(tt); strings.has_prefix(lt, ".model") || strings.has_prefix(lt, ".subc") {
-				f := strings.fields(replace_parens(tt), context.temp_allocator)
-				part = f[1] if len(f) > 1 else ""
+	part := ""
+	for raw, i in split_lines(text) {
+		r := raw
+		tt := strings.trim_space(r)
+		if lt := lower(tt); strings.has_prefix(lt, ".model") || strings.has_prefix(lt, ".subc") {
+			f := strings.fields(replace_parens(tt), context.temp_allocator)
+			part = f[1] if len(f) > 1 else ""
+		}
+		if len(tt) > 0 && tt[0] != '*' && tt[0] != ';' {
+			if strings.contains(r, "\u00a0") || strings.contains(r, "µ") || strings.contains(r, "μ") {
+				r, _ = strings.replace_all(r, "\u00a0", " ")
+				r, _ = strings.replace_all(r, "µ", "u")
+				r, _ = strings.replace_all(r, "μ", "u")
+				d := strings.trim_space(r)
+				add_item(rep, .Non_Ascii, i + 1, part, d[:min(40, len(d))])
 			}
-			if len(tt) > 0 && tt[0] != '*' && tt[0] != ';' {
-				if strings.contains(r, "\u00a0") || strings.contains(r, "µ") || strings.contains(r, "μ") {
-					r, _ = strings.replace_all(r, "\u00a0", " ")
-					r, _ = strings.replace_all(r, "µ", "u")
-					r, _ = strings.replace_all(r, "μ", "u")
-					d := strings.trim_space(r)
-					add_item(&rep, .Non_Ascii, i + 1, part, d[:min(40, len(d))])
-				}
-				lr := lower(r)
-				// ".SUBCKT"/".MODEL" after text on a line that is no card: on its own line
-				if tt[0] != '.' && tt[0] != '+' {
-					k := -1
-					for kw in ([]string{" .subckt ", "\t.subckt ", " .model ", "\t.model "}) do if x := strings.index(lr, kw); x >= 0 && (k < 0 || x < k) do k = x
-					if k > 0 {
-						f := strings.fields(r[k:], context.temp_allocator)
-						part = f[1] if len(f) > 1 else part
-						add_item(&rep, .Run_Together, i + 1, part, "")
-						append(&pre, Rline{strings.trim_right_space(r[:k]), i + 1})
-						append(&pre, Rline{strings.trim_space(r[k:]), i + 1})
-						continue
-					}
-				}
-				if k := strings.index(lr, ".ends"); k > 0 && strings.has_suffix(strings.trim_right_space(r[:k]), ")") {
-					add_item(&rep, .Glued_Ends, i + 1, part, "")
+			lr := lower(r)
+			// ".SUBCKT"/".MODEL" after text on a line that is no card: on its own line
+			if tt[0] != '.' && tt[0] != '+' {
+				k := -1
+				for kw in ([]string{" .subckt ", "\t.subckt ", " .model ", "\t.model "}) do if x := strings.index(lr, kw); x >= 0 && (k < 0 || x < k) do k = x
+				if k > 0 {
+					f := strings.fields(r[k:], context.temp_allocator)
+					part = f[1] if len(f) > 1 else part
+					add_item(rep, .Run_Together, i + 1, part, "")
 					append(&pre, Rline{strings.trim_right_space(r[:k]), i + 1})
-					append(&pre, Rline{r[k:], i + 1})
+					append(&pre, Rline{strings.trim_space(r[k:]), i + 1})
 					continue
 				}
 			}
-			append(&pre, Rline{r, i + 1})
+			if k := strings.index(lr, ".ends"); k > 0 && strings.has_suffix(strings.trim_right_space(r[:k]), ")") {
+				add_item(rep, .Glued_Ends, i + 1, part, "")
+				append(&pre, Rline{strings.trim_right_space(r[:k]), i + 1})
+				append(&pre, Rline{r[k:], i + 1})
+				continue
+			}
 		}
+		append(&pre, Rline{r, i + 1})
 	}
+	return pre
+}
 
-	// 1. lines
+// Stage 1: each line by itself: misspelt .SUBCKT, ";" comments, .SIMULATOR, and in a model card
+// "N = 1", text after ";" and two lines run together.
+@(private = "file")
+repair_lines :: proc(pre: []Rline, rep: ^Repair_Report) -> [dynamic]Rline {
 	L := make([dynamic]Rline)
 	in_card := false
 	part := "" // the card or subcircuit the line belongs to (for the report)
@@ -258,19 +286,19 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 			t = tcat(".SUBCKT", t[sp:])
 			f := strings.fields(t, context.temp_allocator)
 			part = f[1] if len(f) > 1 else ""
-			add_item(&rep, .Misspelt_Subckt, n, part, "")
+			add_item(rep, .Misspelt_Subckt, n, part, "")
 		}
 		if lt := lower(t); strings.has_prefix(lt, ".model") || strings.has_prefix(lt, ".subckt") {
 			f := strings.fields(replace_parens(t), context.temp_allocator)
 			part = f[1] if len(f) > 1 else ""
 		}
 		if strings.has_prefix(t, ";") {
-			add_item(&rep, .Comment_Semicolon, n, part, "")
+			add_item(rep, .Comment_Semicolon, n, part, "")
 			t = tcat("*", t[1:])
 		}
 		low := lower(t)
 		if strings.has_prefix(low, ".simulator") {
-			add_item(&rep, .Simulator_Line, n, "", t)
+			add_item(rep, .Simulator_Line, n, "", t)
 			t = tcat("* ", t)
 		}
 		if strings.has_prefix(low, ".model") do in_card = true
@@ -291,7 +319,7 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 				t = strings.to_string(nb)
 			}
 			if k := strings.index_byte(t, ';'); k > 0 {
-				add_item(&rep, .Inline_Semicolon, n, part, strings.trim_space(t[k:])[:min(40, len(strings.trim_space(t[k:])))])
+				add_item(rep, .Inline_Semicolon, n, part, strings.trim_space(t[k:])[:min(40, len(strings.trim_space(t[k:])))])
 				t = strings.trim_right_space(t[:k])
 			}
 			// "RC=0.015  +CJE=250E-12"
@@ -304,14 +332,19 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 				for e < len(t) && is_ident_char(t[e]) do e += 1
 				for e < len(t) && t[e] == ' ' do e += 1
 				if e >= len(t) || t[e] != '=' do continue
-				add_item(&rep, .Plus_In_Line, n, part, t[k:min(len(t), k + 20)])
+				add_item(rep, .Plus_In_Line, n, part, t[k:min(len(t), k + 20)])
 				t = tcat(t[:j], t[j + 1:])
 			}
 		}
 		append(&L, Rline{t, n})
 	}
+	return L
+}
 
-	// 2. subcircuit ends, label lines
+// Stage 2: where each subcircuit ends (a missing .ENDS, a stray one), and text outside the
+// cards (label lines, made comments).
+@(private = "file")
+repair_subckt_ends :: proc(L: []Rline, rep: ^Repair_Report) -> [dynamic]Rline {
 	out := make([dynamic]Rline)
 	label :: proc(rep: ^Repair_Report, out: ^[dynamic]Rline, l: Rline) {
 		add_item(rep, .Label_Line, l.n, "", l.text[:min(40, len(l.text))])
@@ -361,10 +394,10 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 					for last + 1 < j && strings.has_prefix(L[last + 1].text, "+") do last += 1
 				}
 				f := strings.fields(t, context.temp_allocator)
-				add_item(&rep, .Missing_Ends, L[i].n, f[1] if len(f) > 1 else "", "")
+				add_item(rep, .Missing_Ends, L[i].n, f[1] if len(f) > 1 else "", "")
 			}
 			for k in i ..= min(last, len(L) - 1) {
-				if is_body_text(L[k].text) && !element_like(L[k].text) do label(&rep, &out, L[k])
+				if is_body_text(L[k].text) && !element_like(L[k].text) do label(rep, &out, L[k])
 				else do append(&out, L[k])
 			}
 			if last != j || j >= len(L) do append(&out, Rline{".ENDS", L[min(last, len(L) - 1)].n})
@@ -372,81 +405,86 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 			continue
 		}
 		if strings.has_prefix(low, ".ends") {
-			add_item(&rep, .Stray_Ends, L[i].n, "", "")
+			add_item(rep, .Stray_Ends, L[i].n, "", "")
 			i += 1
 			continue
 		}
-		if is_body_text(t) do label(&rep, &out, L[i])
+		if is_body_text(t) do label(rep, &out, L[i])
 		else do append(&out, L[i])
 		i += 1
 	}
-	L = out
+	return out
+}
 
-	// 2b. a model after its subcircuit's .ENDS whose name other top-level models share (each part
-	// with its own "ZDiode"): it belongs to that subcircuit
-	{
-		count := make(map[string]int)
-		d := 0
-		for l in L {
-			lw := lower(l.text)
-			if strings.has_prefix(lw, ".subckt") do d += 1
-			else if strings.has_prefix(lw, ".ends") do d = max(0, d - 1)
-			else if d == 0 && strings.has_prefix(lw, ".model") {
-				f := strings.fields(replace_parens(l.text), context.temp_allocator)
-				if len(f) > 1 do count[lower(f[1])] += 1
-			}
+// Stage 2b: a model after its subcircuit's .ENDS whose name other top-level models share (each
+// part with its own "ZDiode"): it belongs to that subcircuit, and is moved into it.
+@(private = "file")
+repair_models_after_ends :: proc(L: []Rline, rep: ^Repair_Report) -> [dynamic]Rline {
+	count := make(map[string]int)
+	d := 0
+	for l in L {
+		lw := lower(l.text)
+		if strings.has_prefix(lw, ".subckt") do d += 1
+		else if strings.has_prefix(lw, ".ends") do d = max(0, d - 1)
+		else if d == 0 && strings.has_prefix(lw, ".model") {
+			f := strings.fields(replace_parens(l.text), context.temp_allocator)
+			if len(f) > 1 do count[lower(f[1])] += 1
 		}
-		moved := make(map[int]bool)
-		out = make([dynamic]Rline)
-		refs := make(map[string]bool)
-		here := make(map[string]bool)
-		sub := ""
-		d = 0
-		for k := 0; k < len(L); k += 1 {
-			if moved[k] do continue
-			lw := lower(L[k].text)
-			if strings.has_prefix(lw, ".subckt") {
-				d += 1
-				if d == 1 {
-					clear(&refs)
-					clear(&here)
-					f := strings.fields(L[k].text, context.temp_allocator)
-					sub = f[1] if len(f) > 1 else ""
-				}
-			} else if strings.has_prefix(lw, ".ends") {
-				d = max(0, d - 1)
-				for m := k + 1; d == 0; {
-					for m < len(L) && (len(L[m].text) == 0 || L[m].text[0] == '*') do m += 1
-					if m >= len(L) || !strings.has_prefix(lower(L[m].text), ".model") do break
-					f := strings.fields(replace_parens(L[m].text), context.temp_allocator)
-					if len(f) < 2 do break
-					nm := lower(f[1])
-					if count[nm] < 2 || !refs[nm] || here[nm] do break
-					e := rcard_end(L[:], m)
-					for q in m ..< e {
-						append(&out, L[q])
-						moved[q] = true
-					}
-					add_item(&rep, .Model_After_Ends, L[m].n, sub, f[1])
-					here[nm] = true
-					m = e
-				}
-			} else if d >= 1 {
-				if element_like(L[k].text) do for c in model_candidates(L[k].text) do refs[c] = true
-				else if strings.has_prefix(lw, ".model") {
-					f := strings.fields(replace_parens(L[k].text), context.temp_allocator)
-					if len(f) > 1 do here[lower(f[1])] = true
-				}
-			}
-			append(&out, L[k])
-		}
-		L = out
 	}
+	moved := make(map[int]bool)
+	out := make([dynamic]Rline)
+	refs := make(map[string]bool)
+	here := make(map[string]bool)
+	sub := ""
+	d = 0
+	for k := 0; k < len(L); k += 1 {
+		if moved[k] do continue
+		lw := lower(L[k].text)
+		if strings.has_prefix(lw, ".subckt") {
+			d += 1
+			if d == 1 {
+				clear(&refs)
+				clear(&here)
+				f := strings.fields(L[k].text, context.temp_allocator)
+				sub = f[1] if len(f) > 1 else ""
+			}
+		} else if strings.has_prefix(lw, ".ends") {
+			d = max(0, d - 1)
+			for m := k + 1; d == 0; {
+				for m < len(L) && (len(L[m].text) == 0 || L[m].text[0] == '*') do m += 1
+				if m >= len(L) || !strings.has_prefix(lower(L[m].text), ".model") do break
+				f := strings.fields(replace_parens(L[m].text), context.temp_allocator)
+				if len(f) < 2 do break
+				nm := lower(f[1])
+				if count[nm] < 2 || !refs[nm] || here[nm] do break
+				e := rcard_end(L[:], m)
+				for q in m ..< e {
+					append(&out, L[q])
+					moved[q] = true
+				}
+				add_item(rep, .Model_After_Ends, L[m].n, sub, f[1])
+				here[nm] = true
+				m = e
+			}
+		} else if d >= 1 {
+			if element_like(L[k].text) do for c in model_candidates(L[k].text) do refs[c] = true
+			else if strings.has_prefix(lw, ".model") {
+				f := strings.fields(replace_parens(L[k].text), context.temp_allocator)
+				if len(f) > 1 do here[lower(f[1])] = true
+			}
+		}
+		append(&out, L[k])
+	}
+	return out
+}
 
-	// 3. model cards
-	out = make([dynamic]Rline)
+// Stage 3: each .model card: comments between its lines, its parentheses, "NE 1.33",
+// parameters given twice, a diode's NBV; and what to check (capacitances, N, the type).
+@(private = "file")
+repair_model_cards :: proc(L: []Rline, rep: ^Repair_Report) -> [dynamic]Rline {
+	out := make([dynamic]Rline)
 	depth := 0
-	i = 0
+	i := 0
 	for i < len(L) {
 		t := L[i].text
 		low := lower(t)
@@ -463,84 +501,16 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 			x := L[k].text
 			if len(x) > 0 && x[0] == '+' || k == i do append(&card, L[k])
 			else if len(x) > 0 {
-				add_item(&rep, .Comment_In_Card, L[k].n, "", "")
+				add_item(rep, .Comment_In_Card, L[k].n, "", "")
 				append(&out, L[k])
 			}
 		}
 		fields0 := strings.fields(replace_parens(card[0].text), context.temp_allocator)
 		name := fields0[1] if len(fields0) > 1 else ""
 		typ := upper(fields0[2]) if len(fields0) > 2 else ""
-		// the closing ")" and what follows it
-		opened, closed_at := false, -1
-		depth_p := 0
-		find: for &c, ci in card {
-			for p in 0 ..< len(c.text) {
-				switch c.text[p] {
-				case '(':
-					depth_p += 1
-					opened = true
-				case ')':
-					depth_p -= 1
-					if opened && depth_p == 0 {
-						rest := strings.trim_space(c.text[p + 1:])
-						for d in card[ci + 1:] do rest = tcat(rest, strings.trim_space(d.text))
-						if len(rest) > 0 {
-							add_item(&rep, .After_Paren, c.n, name, rest[:min(40, len(rest))])
-							c.text = c.text[:p + 1]
-							resize(&card, ci + 1)
-						}
-						closed_at = ci
-						break find
-					}
-				}
-			}
-		}
-		if opened && closed_at < 0 {
-			add_item(&rep, .Unclosed_Paren, card[0].n, name, "")
-			card[len(card) - 1].text = tcat(card[len(card) - 1].text, " )")
-		}
-		// "NE 1.33" without "=", right to left
-		for &c in card {
-			sp := spans_of(c.text, params_from(c.text))
-			for k := len(sp) - 2; k >= 0; k -= 1 {
-				a := c.text[sp[k][0]:sp[k][1]]
-				b := c.text[sp[k + 1][0]:sp[k + 1][1]]
-				if strings.contains_rune(a, '=') || strings.contains_rune(b, '=') do continue
-				ok_a := is_ident_start(a[0])
-				for q in 0 ..< len(a) do if !is_ident_char(a[q]) do ok_a = false
-				if !ok_a do continue
-				if k > 0 && strings.has_suffix(c.text[sp[k - 1][0]:sp[k - 1][1]], "=") do continue
-				if _, ok := parse_eng(b); !ok || !is_number_token(b) do continue
-				add_item(&rep, .Missing_Equals, c.n, name, tcat(a, " ", b))
-				c.text = tcat(c.text[:sp[k][1]], "=", c.text[sp[k + 1][0]:])
-			}
-		}
-		// a parameter given twice: the last kept
-		{
-			Occ :: struct {ci, s, e: int, key: string}
-			occ := make([dynamic]Occ)
-			count := make(map[string]int)
-			for c, ci in card {
-				for s in spans_of(c.text, params_from(c.text)) {
-					tok := c.text[s[0]:s[1]]
-					eq := strings.index_byte(tok, '=')
-					if eq <= 0 || eq == len(tok) - 1 do continue
-					key := upper(tok[:eq])
-					append(&occ, Occ{ci, s[0], s[1], key})
-					count[key] += 1
-				}
-			}
-			seen := make(map[string]int)
-			#reverse for o in occ {
-				seen[o.key] += 1
-				if seen[o.key] == 1 do continue
-				c := &card[o.ci]
-				add_item(&rep, .Duplicate_Param, c.n, name, c.text[o.s:o.e])
-				e := o.e
-				for e < len(c.text) && c.text[e] == ' ' do e += 1
-				c.text = tcat(c.text[:o.s], c.text[e:])
-			}
-		}
+		card = card_close_paren(card, name, rep)
+		card_missing_equals(card[:], name, rep)
+		card_duplicate_params(card[:], name, rep)
 		// parameters of the repaired card
 		params := make(map[string]string)
 		for c in card {
@@ -551,10 +521,10 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 		}
 		if typ == "D" || strings.has_prefix(typ, "D(") {
 			nv, has_n := parse_eng(params["N"])
-			if has_n && (nv < 0.01 || nv > 1e5) do add_item(&rep, .Implausible_N, card[0].n, name, tcat("N=", params["N"]))
+			if has_n && (nv < 0.01 || nv > 1e5) do add_item(rep, .Implausible_N, card[0].n, name, tcat("N=", params["N"]))
 			if _, has_bv := params["BV"]; has_bv && has_n && nv != 1 {
 				if _, has := params["NBV"]; !has {
-					add_item(&rep, .Nbv, card[0].n, name, "")
+					add_item(rep, .Nbv, card[0].n, name, "")
 					lc := &card[len(card) - 1]
 					if strings.has_suffix(lc.text, ")") do lc.text = tcat(strings.trim_right(lc.text[:len(lc.text) - 1], " "), " NBV=1 )")
 					else do lc.text = tcat(lc.text, " NBV=1")
@@ -562,7 +532,7 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 			}
 		}
 		for k in ([]string{"CJO", "CJ0", "CJE", "CJC", "CJS", "CGSO", "CGDO", "CGBO", "CBD", "CBS", "CJ"}) {
-			if v, ok := parse_eng(params[k]); ok && v >= 1e-3 do add_item(&rep, .Capacitance_Unit, card[0].n, name, tcat(k, "=", params[k]))
+			if v, ok := parse_eng(params[k]); ok && v >= 1e-3 do add_item(rep, .Capacitance_Unit, card[0].n, name, tcat(k, "=", params[k]))
 		}
 		if depth == 0 && (typ == "NPN" || typ == "PNP") {
 			// the description just above: the comment lines before the card
@@ -576,18 +546,104 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 				if strings.contains(u, "PNP") do says_pnp = true
 			}
 			if (typ == "NPN" && says_pnp && !says_npn) || (typ == "PNP" && says_npn && !says_pnp) {
-				add_item(&rep, .Type_Vs_Description, card[0].n, name, fmt.tprintf("%s %s card; its description says %s", "an" if typ == "NPN" else "a", typ, "PNP" if typ == "NPN" else "NPN"))
+				add_item(rep, .Type_Vs_Description, card[0].n, name, fmt.tprintf("%s %s card; its description says %s", "an" if typ == "NPN" else "a", typ, "PNP" if typ == "NPN" else "NPN"))
 			}
 		}
 		append(&out, ..card[:])
 		i = m
 	}
-	L = out
+	return out
+}
 
-	// 4. blocks at the top: numeric names, duplicates
-	Block :: struct {start, end: int, name, key: string} // lines [start, end)
-	blocks := make([dynamic]Block)
-	i = 0
+// A card's closing ")": text after it is removed, a missing one added.
+@(private = "file")
+card_close_paren :: proc(card: [dynamic]Rline, name: string, rep: ^Repair_Report) -> [dynamic]Rline {
+	card := card
+	opened, closed_at := false, -1
+	depth_p := 0
+	find: for &c, ci in card {
+		for p in 0 ..< len(c.text) {
+			switch c.text[p] {
+			case '(':
+				depth_p += 1
+				opened = true
+			case ')':
+				depth_p -= 1
+				if opened && depth_p == 0 {
+					rest := strings.trim_space(c.text[p + 1:])
+					for d in card[ci + 1:] do rest = tcat(rest, strings.trim_space(d.text))
+					if len(rest) > 0 {
+						add_item(rep, .After_Paren, c.n, name, rest[:min(40, len(rest))])
+						c.text = c.text[:p + 1]
+						resize(&card, ci + 1)
+					}
+					closed_at = ci
+					break find
+				}
+			}
+		}
+	}
+	if opened && closed_at < 0 {
+		add_item(rep, .Unclosed_Paren, card[0].n, name, "")
+		card[len(card) - 1].text = tcat(card[len(card) - 1].text, " )")
+	}
+	return card
+}
+
+// "NE 1.33" without "=", right to left.
+@(private = "file")
+card_missing_equals :: proc(card: []Rline, name: string, rep: ^Repair_Report) {
+	for &c in card {
+		sp := spans_of(c.text, params_from(c.text))
+		for k := len(sp) - 2; k >= 0; k -= 1 {
+			a := c.text[sp[k][0]:sp[k][1]]
+			b := c.text[sp[k + 1][0]:sp[k + 1][1]]
+			if strings.contains_rune(a, '=') || strings.contains_rune(b, '=') do continue
+			ok_a := is_ident_start(a[0])
+			for q in 0 ..< len(a) do if !is_ident_char(a[q]) do ok_a = false
+			if !ok_a do continue
+			if k > 0 && strings.has_suffix(c.text[sp[k - 1][0]:sp[k - 1][1]], "=") do continue
+			if _, ok := parse_eng(b); !ok || !is_number_token(b) do continue
+			add_item(rep, .Missing_Equals, c.n, name, tcat(a, " ", b))
+			c.text = tcat(c.text[:sp[k][1]], "=", c.text[sp[k + 1][0]:])
+		}
+	}
+}
+
+// A parameter given twice: the last is kept.
+@(private = "file")
+card_duplicate_params :: proc(card: []Rline, name: string, rep: ^Repair_Report) {
+	Occ :: struct {ci, s, e: int, key: string}
+	occ := make([dynamic]Occ)
+	count := make(map[string]int)
+	for c, ci in card {
+		for s in spans_of(c.text, params_from(c.text)) {
+			tok := c.text[s[0]:s[1]]
+			eq := strings.index_byte(tok, '=')
+			if eq <= 0 || eq == len(tok) - 1 do continue
+			key := upper(tok[:eq])
+			append(&occ, Occ{ci, s[0], s[1], key})
+			count[key] += 1
+		}
+	}
+	seen := make(map[string]int)
+	#reverse for o in occ {
+		seen[o.key] += 1
+		if seen[o.key] == 1 do continue
+		c := &card[o.ci]
+		add_item(rep, .Duplicate_Param, c.n, name, c.text[o.s:o.e])
+		e := o.e
+		for e < len(c.text) && c.text[e] == ' ' do e += 1
+		c.text = tcat(c.text[:o.s], c.text[e:])
+	}
+}
+
+// Stage 4: the cards at the top of the file: a copy's name that its description corrects,
+// copies (dropped: drop holds their lines), numeric model names. L is changed in place.
+@(private = "file")
+repair_blocks :: proc(L: []Rline, rep: ^Repair_Report) -> ([dynamic]Card_Block, map[int]bool) {
+	blocks := make([dynamic]Card_Block)
+	i := 0
 	for i < len(L) {
 		low := lower(L[i].text)
 		if strings.has_prefix(low, ".subckt") || strings.has_prefix(low, ".model") {
@@ -606,7 +662,7 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 				}
 			}
 			f := strings.fields(replace_parens(L[i].text), context.temp_allocator)
-			append(&blocks, Block{i, e, f[1] if len(f) > 1 else "", strings.to_string(kb)})
+			append(&blocks, Card_Block{i, e, f[1] if len(f) > 1 else "", strings.to_string(kb)})
 			i = e
 			continue
 		}
@@ -629,7 +685,7 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 				if e := L[b.end - 1].text; strings.has_prefix(lower(e), ".ends") {
 					if k = strings.index(e, b.name); k > 0 do L[b.end - 1].text = tcat(e[:k], nn, e[k + len(b.name):])
 				}
-				add_item(&rep, .Name_From_Src, L[b.start].n, b.name, tcat("now ", nn))
+				add_item(rep, .Name_From_Src, L[b.start].n, b.name, tcat("now ", nn))
 				top[lower(nn)] = true
 				defined[lower(nn)] = true
 				first[lower(nn)] = bi
@@ -637,16 +693,32 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 				continue
 			}
 			if blocks[fi].key == b.key {
-				add_item(&rep, .Duplicate_Card, L[b.start].n, b.name, fmt.tprintf("as at line %d", L[blocks[fi].start].n))
+				add_item(rep, .Duplicate_Card, L[b.start].n, b.name, fmt.tprintf("as at line %d", L[blocks[fi].start].n))
 				for k in b.start ..< b.end do drop[k] = true
 			} else {
-				add_item(&rep, .Differing_Duplicate, L[b.start].n, b.name, fmt.tprintf("also at line %d", L[blocks[fi].start].n))
+				add_item(rep, .Differing_Duplicate, L[b.start].n, b.name, fmt.tprintf("also at line %d", L[blocks[fi].start].n))
 			}
 			continue
 		}
 		first[n] = bi
 	}
-	// model names that are numbers: "M5401", and where elements use them
+	repair_numeric_names(L, blocks[:], drop, &defined, rep)
+	// warnings on a copy that is removed: said once, at the copy kept
+	{
+		gone := make(map[int]bool)
+		for k in 0 ..< len(L) do if drop[k] do gone[L[k].n] = true
+		kept := make([dynamic]Repair_Item)
+		for it in rep.checks do if !(it.kind == .Type_Vs_Description && gone[it.line]) do append(&kept, it)
+		rep.checks = kept
+	}
+	return blocks, drop
+}
+
+// Model names that are numbers (".MODEL 5401 PNP", a number to SPICE) get an "M" before them
+// ("M5401", one more while the name is taken), on their card and on the element lines that use
+// them. defined: the names at the top, the new ones added.
+@(private = "file")
+repair_numeric_names :: proc(L: []Rline, blocks: []Card_Block, drop: map[int]bool, defined: ^map[string]bool, rep: ^Repair_Report) {
 	renamed := make(map[string]string)
 	for &b in blocks {
 		if !strings.has_prefix(lower(L[b.start].text), ".model") || !is_numeric_name(b.name) || drop[b.start] do continue
@@ -654,7 +726,7 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 		for defined[lower(nn)] do nn = tcat("M", nn)
 		defined[lower(nn)] = true
 		renamed[lower(b.name)] = nn
-		add_item(&rep, .Numeric_Name, L[b.start].n, b.name, tcat("now ", nn))
+		add_item(rep, .Numeric_Name, L[b.start].n, b.name, tcat("now ", nn))
 		t := L[b.start].text
 		k := strings.index(t, b.name)
 		L[b.start].text = tcat(t[:k], nn, t[k + len(b.name):])
@@ -677,17 +749,13 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 			}
 		}
 	}
-	// warnings on a copy that is removed: said once, at the copy kept
-	{
-		gone := make(map[int]bool)
-		for k in 0 ..< len(L) do if drop[k] do gone[L[k].n] = true
-		kept := make([dynamic]Repair_Item)
-		for it in rep.checks do if !(it.kind == .Type_Vs_Description && gone[it.line]) do append(&kept, it)
-		rep.checks = kept
-	}
-	// used but defined nowhere: at the top of the file, in the subcircuit itself, or in spicy's
-	// libraries (a card inside another subcircuit does not count); a model for D, Q, M, J and a
-	// subcircuit for X
+}
+
+// Stage 5: used but defined nowhere: at the top of the file, in the subcircuit itself, or in spicy's
+// libraries (a card inside another subcircuit does not count); a model for D, Q, M, J and a
+// subcircuit for X
+@(private = "file")
+repair_undefined :: proc(L: []Rline, blocks: []Card_Block, drop: map[int]bool, replacing: string, rep: ^Repair_Report) {
 	top_model := make(map[string]bool)
 	top_sub := make(map[string]bool)
 	for b in blocks {
@@ -747,24 +815,15 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 					if len(h) > 1 && lower(h[1]) == models[fit].name do written = h[1]
 				}
 				for x, xi in g do if xi > 0 && x == name {g[xi] = written; break}
-				add_item(&rep, .Local_Model_Name, l.n, sub, fmt.tprintf("%s: %s made %s", g[0], name, written))
+				add_item(rep, .Local_Model_Name, l.n, sub, fmt.tprintf("%s: %s made %s", g[0], name, written))
 				l.text = strings.join(g, " ")
 				used[models[fit].name] = true
 				continue
 			}
-			add_item(&rep, .Undefined_Model, l.n, sub, fmt.tprintf("%s uses %s", g[0], name))
+			add_item(rep, .Undefined_Model, l.n, sub, fmt.tprintf("%s uses %s", g[0], name))
 		}
 		li = e
 	}
-
-	for len(L) > 0 && len(L[len(L) - 1].text) == 0 do pop(&L)
-	b := strings.builder_make()
-	for l, k in L {
-		if drop[k] do continue
-		strings.write_string(&b, l.text)
-		strings.write_byte(&b, '\n')
-	}
-	return strings.to_string(b), rep
 }
 
 // How many items there are of each kind.
