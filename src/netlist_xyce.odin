@@ -132,3 +132,45 @@ xyce_options :: proc(l: string, fx: ^Xyce_Fix) -> string {
 	if len(dropped) > 0 do fmt.sbprintf(&b, "* ngspice options Xyce does not have: %s\n", strings.join(dropped[:], " ", context.temp_allocator))
 	return strings.trim_right(strings.to_string(b), "\n")
 }
+
+// Xyce runs one analysis per netlist, and writes resistor, capacitor, diode … currents only
+// when asked for them: the .print line for the results of a .tran (else a .dc) asks for every
+// voltage and two-pin current (V(*) I(*)) and the pin currents of transistors (IC(Q1) …).
+// Written before the .end; nl says what the run then reads (xyce_print_raw, xyce_noise_only).
+xyce_analyses :: proc(nl: ^Netlist, b: ^strings.Builder, s: ^Schematic, sim: ^Simulator_Def, dl: []string) {
+	// Xyce runs one analysis per netlist: with a .noise, the other analyses are not run
+	noise, others := false, 0
+	for l in dl {
+		low := lower(strings.trim_space(l))
+		if strings.has_prefix(low, ".noise") {
+			noise = true
+			// Xyce 7.10 rejects a reference node, V(out,ref), with a message about PTS_PER_SUMMARY
+			open := strings.index_byte(low, '(')
+			close := strings.index_byte(low, ')')
+			if open >= 0 && close > open && strings.contains(low[open:close], ",") {
+				append(&nl.errors, tcat(".noise \"", strings.trim_space(strings.trim_space(l)[len(".noise"):]), "\": Xyce does not accept a reference node in the output. Correct: .noise V(out) V1 dec 10 10 1Meg (or run V(out,ref) on ngspice)"))
+			}
+		} else if strings.has_prefix(low, ".tran") || strings.has_prefix(low, ".ac") || strings.has_prefix(low, ".dc") || strings.has_prefix(low, ".op") do others += 1
+	}
+	nl.xyce_noise_only = noise && others == 0
+	if noise && others > 0 do append(&nl.warnings, "Xyce runs only the .noise analysis of this schematic: its .tran, .ac, .dc and .op are not run (use ngspice or VACASK to run them together)")
+	// the results of a .tran (else of a .dc) with every current, unless the simulator
+	// is set to write one raw file per analysis itself
+	analysis := ""
+	for l in dl {
+		low := lower(strings.trim_space(l))
+		if strings.has_prefix(low, ".tran") do analysis = "tran"
+		else if strings.has_prefix(low, ".dc") && len(analysis) == 0 do analysis = "dc"
+	}
+	if len(analysis) > 0 && sim.raw != .Per_Analysis {
+		nl.xyce_print_raw = true
+		fmt.sbprintf(b, ".print %s format=raw V(*) I(*)", analysis)
+		for &c in s.comps {
+			sym := symbol_find(c.sym)
+			if sym == nil || sym.kind != .Part || comp_subckt(&c, sym, nl.local) != nil do continue
+			if len(c.ref) == 0 || !strings.contains_rune("QqMmJj", rune(c.ref[0])) do continue
+			for pd in sym.pins do if len(pd.cur) > 0 && len(pd.element) == 0 do fmt.sbprintf(b, " I%s(%s)", strings.to_upper(pd.cur, context.temp_allocator), c.ref)
+		}
+		strings.write_byte(b, '\n')
+	}
+}

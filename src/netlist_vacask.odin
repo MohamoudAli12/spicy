@@ -8,23 +8,66 @@ import "core:strings"
 // The VACASK netlist: VACASK has a language of its own, so parts, sources, models,
 // subcircuits, options and analyses are translated from their SPICE form.
 
-netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: string) -> string {
-	body := strings.builder_make(context.temp_allocator)
-	loads := make([dynamic]string, context.temp_allocator)
-	models := make([dynamic]string, context.temp_allocator)
-	check_pins(nl, s)
-	used := make([dynamic]string, context.temp_allocator) // the symbols, in the order the parts use them
-	sub_needed := make([dynamic]^Lib_Entry, context.temp_allocator)
-	vnode :: proc(n: string) -> string {return n if n == "0" else lower(n)}
+// What the stages of netlist_vacask gather, for the text it writes at the end.
+@(private = "file")
+Vacask_Build :: struct {
+	body:        strings.Builder, // the parts' lines
+	loads:       [dynamic]string, // the OSDI files: load "…"
+	models:      [dynamic]string, // the toplevel model lines
+	used:        [dynamic]string, // the symbols, in the order the parts use them
+	sub_needed:  [dynamic]^Lib_Entry, // the subcircuits the parts are
 	// initial conditions for the transient analysis (VACASK takes them there, not on the
 	// devices): capacitors' "ic=" (used with uic, as in SPICE) and .ic directives (always)
-	cap_ic := make([dynamic]string, context.temp_allocator)
-	dir_ic := make([dynamic]string, context.temp_allocator)
-	ic_entry :: proc(a, b, v: string) -> string {
-		if b == "0" do return fmt.tprintf("\"%s\", %s", a, v)
-		if a == "0" do return fmt.tprintf("\"%s\", %s", b, vacask_value(tcat("-", v)) if v[0] != '-' else v[1:])
-		return fmt.tprintf("\"%s\", \"%s\", %s", a, b, v)
-	}
+	cap_ic:      [dynamic]string,
+	dir_ic:      [dynamic]string,
+	control:     [dynamic]string, // the analyses
+	params:      [dynamic]string, // parameters lines, from .param
+	model_cards: [dynamic]string, // the .model directives
+	verbatim:    [dynamic]string, // lines of VACASK's own syntax in the directives
+	user_opts:   [dynamic][2]string, // from .options
+	spice_elems: [dynamic]string, // SPICE element lines in the directives
+	elem_lines:  [dynamic]string, // the same, translated
+	out:         Vacask_Out, // the translated subcircuits
+}
+
+netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: string) -> string {
+	check_pins(nl, s)
+	vb: Vacask_Build
+	vb.body = strings.builder_make(context.temp_allocator)
+	vb.loads = make([dynamic]string, context.temp_allocator)
+	vb.models = make([dynamic]string, context.temp_allocator)
+	vb.used = make([dynamic]string, context.temp_allocator)
+	vb.sub_needed = make([dynamic]^Lib_Entry, context.temp_allocator)
+	vb.cap_ic = make([dynamic]string, context.temp_allocator)
+	vb.dir_ic = make([dynamic]string, context.temp_allocator)
+	vb.control = make([dynamic]string, context.temp_allocator)
+	vb.params = make([dynamic]string, context.temp_allocator)
+	vb.model_cards = make([dynamic]string, context.temp_allocator)
+	vb.verbatim = make([dynamic]string, context.temp_allocator)
+	vb.user_opts = make([dynamic][2]string, context.temp_allocator)
+	vb.spice_elems = make([dynamic]string, context.temp_allocator)
+	vb.elem_lines = make([dynamic]string, context.temp_allocator)
+	vacask_parts(nl, s, sim, &vb)
+	vacask_directives(nl, s, sim, &vb)
+	vacask_models(nl, s, &vb)
+	return vacask_text(&vb, sim, title)
+}
+
+// A net of the schematic in VACASK: lower case (ground stays 0).
+@(private = "file")
+vacask_net :: proc(n: string) -> string {return n if n == "0" else lower(n)}
+
+// An initial condition of the transient analysis: V(a) = v, or V(a, b) = v.
+@(private = "file")
+vacask_ic_entry :: proc(a, b, v: string) -> string {
+	if b == "0" do return fmt.tprintf("\"%s\", %s", a, v)
+	if a == "0" do return fmt.tprintf("\"%s\", %s", b, vacask_value(tcat("-", v)) if v[0] != '-' else v[1:])
+	return fmt.tprintf("\"%s\", \"%s\", %s", a, b, v)
+}
+
+// The parts: their lines, the files and models they need, the subcircuits they are.
+@(private = "file")
+vacask_parts :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, vb: ^Vacask_Build) {
 	for &c, ci in s.comps {
 		sym := symbol_find(c.sym)
 		if sym == nil {
@@ -37,17 +80,17 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 			append(&nl.errors, fmt.tprintf("%s: the symbol \"%s\" has no :vacask netlist line", c.ref, sym.name))
 			continue
 		}
-		add_unique(&used, sym.name)
+		add_unique(&vb.used, sym.name)
 		nodes := make([]string, len(sym.pins), context.temp_allocator)
-		for k in 0 ..< len(sym.pins) do nodes[k] = vnode(nl.nets.names[nl.nets.pin_net[ci][k]])
+		for k in 0 ..< len(sym.pins) do nodes[k] = vacask_net(nl.nets.names[nl.nets.pin_net[ci][k]])
 		// sense sources in series with the pins
 		ns := vacask_sensed(sym, sim)
 		for k in 0 ..< ns {
 			inner := sense_node(c.ref, sym.pins[k].name)
-			fmt.sbprintf(&body, "%s (%s %s) vsource dc=0\n", sense_source(c.ref, sym.pins[k].name), nodes[k], inner)
+			fmt.sbprintf(&vb.body, "%s (%s %s) vsource dc=0\n", sense_source(c.ref, sym.pins[k].name), nodes[k], inner)
 			nodes[k] = inner
 		}
-		if ns > 0 do add_unique(&models, "model vsource vsource")
+		if ns > 0 do add_unique(&vb.models, "model vsource vsource")
 		line: string
 		if sub != nil {
 			order, err := subckt_pin_map(sub, sym, &c)
@@ -65,93 +108,80 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 			fmt.sbprintf(&ln, ") %s", vacask_name(vf[0]))
 			for x in vf[1:] do fmt.sbprintf(&ln, " %s", lower(x))
 			line = strings.to_string(ln)
-			append(&sub_needed, sub)
+			append(&vb.sub_needed, sub)
 		} else {
 			needs := make([dynamic]string, context.temp_allocator)
 			all, has_ni := nonideal_lines(nl, &c, sym, nodes, true, &needs)
 			if !has_ni do all = fill_template(nl, sym.vacask.line, &c, sym, nodes, true)
 			for n in needs do if ns := symbol_find(n); ns != nil {
-				for l in ns.vacask.loads do add_unique(&loads, l)
-				for m in ns.vacask.models do add_unique(&models, m)
+				for l in ns.vacask.loads do add_unique(&vb.loads, l)
+				for m in ns.vacask.models do add_unique(&vb.models, m)
 			}
-			out_lines := make([dynamic]string, context.temp_allocator)
-			for dev_line in strings.split(all, "\n", context.temp_allocator) {
-				// SPICE "ic=…" on a C or L: VACASK's devices have no such parameter. With uic the
-				// run starts from 0 V and 0 A anyway, so ic=0 is dropped; other values are not
-				// carried over (a warning says so)
-				if strings.contains(lower(dev_line), " ic=") {
-					kept := make([dynamic]string, context.temp_allocator)
-					// the device's two nodes: "name (a b) model …"
-					pa, pb := "", ""
-					if o, cl_ := strings.index_byte(dev_line, '('), strings.index_byte(dev_line, ')'); o >= 0 && cl_ > o {
-						nf := strings.fields(dev_line[o + 1:cl_], context.temp_allocator)
-						if len(nf) >= 2 do pa, pb = nf[0], nf[1]
+			line = vacask_device_ic(nl, &c, all, vb)
+		}
+		strings.write_string(&vb.body, line)
+		strings.write_byte(&vb.body, '\n')
+		for l in sym.vacask.loads do add_unique(&vb.loads, l)
+		for m in sym.vacask.models do add_unique(&vb.models, m)
+		if strings.contains(line, " vsource ") do add_unique(&vb.models, "model vsource vsource")
+		if strings.contains(line, " isource ") do add_unique(&vb.models, "model isource isource")
+		if strings.contains(line, " vcvs ") do add_unique(&vb.models, "model vcvs vcvs")
+		if strings.contains(line, " vccs ") do add_unique(&vb.models, "model vccs vccs")
+	}
+}
+
+// A part's lines without SPICE's "ic=…" on a C or L: VACASK's devices have no such parameter.
+// A capacitor's goes into the transient analysis with uic (vb.cap_ic); with uic the run starts
+// from 0 V and 0 A anyway, so ic=0 is dropped; other values are not carried over (a warning
+// says so).
+@(private = "file")
+vacask_device_ic :: proc(nl: ^Netlist, c: ^Comp, all: string, vb: ^Vacask_Build) -> string {
+	out_lines := make([dynamic]string, context.temp_allocator)
+	for dev_line in strings.split(all, "\n", context.temp_allocator) {
+		if strings.contains(lower(dev_line), " ic=") {
+			kept := make([dynamic]string, context.temp_allocator)
+			// the device's two nodes: "name (a b) model …"
+			pa, pb := "", ""
+			if o, cl_ := strings.index_byte(dev_line, '('), strings.index_byte(dev_line, ')'); o >= 0 && cl_ > o {
+				nf := strings.fields(dev_line[o + 1:cl_], context.temp_allocator)
+				if len(nf) >= 2 do pa, pb = nf[0], nf[1]
+			}
+			for w in strings.fields(dev_line, context.temp_allocator) {
+				if strings.has_prefix(lower(w), "ic=") {
+					v, ok := parse_eng(w[3:])
+					if strings.contains(dev_line, " spicy_c ") && ok && len(pa) > 0 {
+						append(&vb.cap_ic, vacask_ic_entry(pa, pb, fmt.tprintf("%.12g", v)))
+					} else if !ok || v != 0 {
+						append(&nl.warnings, fmt.tprintf("%s: %s is not supported by VACASK and was left out", c.ref, w))
 					}
-					for w in strings.fields(dev_line, context.temp_allocator) {
-						if strings.has_prefix(lower(w), "ic=") {
-							v, ok := parse_eng(w[3:])
-							if strings.contains(dev_line, " spicy_c ") && ok && len(pa) > 0 {
-								append(&cap_ic, ic_entry(pa, pb, fmt.tprintf("%.12g", v)))
-							} else if !ok || v != 0 {
-								append(&nl.warnings, fmt.tprintf("%s: %s is not supported by VACASK and was left out", c.ref, w))
-							}
-							continue
-						}
-						append(&kept, w)
-					}
-					append(&out_lines, strings.join(kept[:], " ", context.temp_allocator))
 					continue
 				}
-				append(&out_lines, dev_line)
+				append(&kept, w)
 			}
-			line = strings.join(out_lines[:], "\n", context.temp_allocator)
+			append(&out_lines, strings.join(kept[:], " ", context.temp_allocator))
+			continue
 		}
-		strings.write_string(&body, line)
-		strings.write_byte(&body, '\n')
-		for l in sym.vacask.loads do add_unique(&loads, l)
-		for m in sym.vacask.models do add_unique(&models, m)
-		if strings.contains(line, " vsource ") do add_unique(&models, "model vsource vsource")
-		if strings.contains(line, " isource ") do add_unique(&models, "model isource isource")
-		if strings.contains(line, " vcvs ") do add_unique(&models, "model vcvs vcvs")
-		if strings.contains(line, " vccs ") do add_unique(&models, "model vccs vccs")
+		append(&out_lines, dev_line)
 	}
-	// directives
+	return strings.join(out_lines[:], "\n", context.temp_allocator)
+}
+
+// The directives: analyses, .ic, .param, .model, .options; SPICE element lines (translated
+// later, like a subcircuit's), and lines of VACASK's own syntax (#vacask blocks).
+@(private = "file")
+vacask_directives :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, vb: ^Vacask_Build) {
 	dl := directive_lines(s, sim)
-	control := make([dynamic]string, context.temp_allocator)
-	params := make([dynamic]string, context.temp_allocator)
-	model_cards := make([dynamic]string, context.temp_allocator)
-	verbatim := make([dynamic]string, context.temp_allocator)
-	user_opts := make([dynamic][2]string, context.temp_allocator) // from .options
 	n_op, n_tran, n_ac, n_dc, n_noise := 0, 0, 0, 0, 0
-	// .ic v(node)=value v(a,b)=value
-	for l in dl {
-		t := strings.trim_space(l)
-		if !strings.has_prefix(lower(t), ".ic ") && !strings.has_prefix(lower(t), ".ic\t") do continue
-		f := strings.fields(replace_parens(t[3:]), context.temp_allocator)
-		for i := 0; i < len(f); {
-			if lower(f[i]) != "v" {i += 1; continue}
-			j := i + 1
-			nodes := make([dynamic]string, context.temp_allocator)
-			for j < len(f) && f[j] != "=" && f[j] != "," {append(&nodes, vnode(f[j])); j += 1}
-			if j + 1 < len(f) && f[j] == "=" && len(nodes) >= 1 {
-				append(&dir_ic, ic_entry(nodes[0], nodes[1] if len(nodes) > 1 else "0", vacask_value(f[j + 1])))
-				i = j + 2
-			} else {
-				append(&nl.warnings, tcat("cannot read ", t))
-				break
-			}
-		}
-	}
+	vacask_ic_directives(nl, dl, vb)
 	vacask_own := make(map[string]bool, 16, context.temp_allocator)
 	for tx in s.texts {
 		if !tx.directive do continue
 		tt := strings.trim_left_space(tx.text)
 		if !strings.has_prefix(tt, "#") do continue
-		if body, ok := directive_for(tx.text, sim); ok && body != tx.text {
-			for l in split_lines(body) do vacask_own[strings.trim_space(l)] = true
+		if own, ok := directive_for(tx.text, sim); ok && own != tx.text {
+			for l in split_lines(own) do vacask_own[strings.trim_space(l)] = true
 		}
 	}
-	spice_elems := make([dynamic]string, context.temp_allocator)
 	in_subckt := false
 	for l in dl {
 		t := strings.trim_space(l)
@@ -169,10 +199,10 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 			// SPICE element lines ("V1 in 0 PULSE(…)", "R5 a b 1k") are translated like the
 			// lines of a subcircuit; the lines of #vacask blocks are VACASK syntax
 			if !vacask_own[t] && spice_element_line(t) {
-				append(&spice_elems, t)
+				append(&vb.spice_elems, t)
 				continue
 			}
-			append(&verbatim, t)
+			append(&vb.verbatim, t)
 			continue
 		}
 		f := strings.fields(replace_parens(t), context.temp_allocator)
@@ -181,40 +211,17 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 		case ".end", ".backanno", ".ic": // .ic: read above, into the transient analyses
 		case ".op":
 			n_op += 1
-			append(&control, fmt.tprintf("analysis op%d op", n_op))
+			append(&vb.control, fmt.tprintf("analysis op%d op", n_op))
 		case ".tran":
 			n_tran += 1
-			pos := make([dynamic]string, context.temp_allocator)
-			uic := false
-			for x in f[1:] {
-				if lower(x) == "uic" do uic = true
-				else do append(&pos, x)
-			}
-			if len(pos) == 1 {
-				stop, _ := parse_eng(pos[0])
-				inject_at(&pos, 0, fmt.tprintf("%.6g", stop / 1000))
-			}
-			if len(pos) < 2 {
-				append(&nl.errors, ".tran needs a stop time")
-				continue
-			}
-			a := fmt.tprintf("analysis tran%d tran step=%s stop=%s", n_tran, vacask_value(pos[0]), vacask_value(pos[1]))
-			if len(pos) > 2 do a = tcat(a, " start=", vacask_value(pos[2]))
-			if len(pos) > 3 do a = tcat(a, " maxstep=", vacask_value(pos[3]))
-			else do a = tcat(a, " maxstep=", vacask_value(pos[0]))
-			if uic do a = tcat(a, " icmode=\"uic\"")
-			ics := make([dynamic]string, context.temp_allocator)
-			append(&ics, ..dir_ic[:])
-			if uic do append(&ics, ..cap_ic[:])
-			if len(ics) > 0 do a = tcat(a, " ic={", strings.join(ics[:], ", ", context.temp_allocator), "}")
-			append(&control, a)
+			if a := vacask_tran(nl, f, n_tran, vb); len(a) > 0 do append(&vb.control, a)
 		case ".ac":
 			n_ac += 1
 			if len(f) < 5 {
 				append(&nl.errors, ".ac needs: dec|oct|lin points fstart fstop")
 				continue
 			}
-			append(&control, fmt.tprintf("analysis ac%d ac from=%s to=%s mode=\"%s\" points=%s", n_ac, vacask_value(f[3]), vacask_value(f[4]), lower(f[1]), vacask_points(f[1], f[2])))
+			append(&vb.control, fmt.tprintf("analysis ac%d ac from=%s to=%s mode=\"%s\" points=%s", n_ac, vacask_value(f[3]), vacask_value(f[4]), lower(f[1]), vacask_points(f[1], f[2])))
 		case ".noise":
 			// .noise V(out) V1 dec points fstart fstop: after replace_parens, f = .noise V out V1 dec points fstart fstop
 			if len(f) < 8 || lower(f[1]) != "v" || strings.contains(f[2], ",") {
@@ -222,57 +229,113 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 				continue
 			}
 			n_noise += 1
-			append(&control, fmt.tprintf("analysis noise%d noise out=[\"%s\"] in=\"%s\" from=%s to=%s mode=\"%s\" points=%s", n_noise, vacask_name(f[2]), vacask_name(f[3]), vacask_value(f[6]), vacask_value(f[7]), lower(f[4]), vacask_points(f[4], f[5])))
+			append(&vb.control, fmt.tprintf("analysis noise%d noise out=[\"%s\"] in=\"%s\" from=%s to=%s mode=\"%s\" points=%s", n_noise, vacask_name(f[2]), vacask_name(f[3]), vacask_value(f[6]), vacask_value(f[7]), lower(f[4]), vacask_points(f[4], f[5])))
 		case ".dc":
 			n_dc += 1
 			if len(f) < 5 {
 				append(&nl.errors, ".dc needs: source start stop step")
 				continue
 			}
-			append(&control, fmt.tprintf("sweep %s instance=\"%s\" parameter=\"dc\" from=%s to=%s step=%s", lower(f[1]), lower(f[1]), vacask_value(f[2]), vacask_value(f[3]), vacask_value(f[4])))
-			append(&control, fmt.tprintf("  analysis dc%d op", n_dc))
+			append(&vb.control, fmt.tprintf("sweep %s instance=\"%s\" parameter=\"dc\" from=%s to=%s step=%s", lower(f[1]), lower(f[1]), vacask_value(f[2]), vacask_value(f[3]), vacask_value(f[4])))
+			append(&vb.control, fmt.tprintf("  analysis dc%d op", n_dc))
 		case ".param", ".params":
 			rest := strings.trim_space(t[len(f[0]):])
 			r, _ := strings.replace_all(rest, "{", "", context.temp_allocator)
 			r, _ = strings.replace_all(r, "}", "", context.temp_allocator)
-			append(&params, tcat("parameters ", r))
+			append(&vb.params, tcat("parameters ", r))
 		case ".model":
-			append(&model_cards, t)
+			append(&vb.model_cards, t)
 		case ".option", ".options", ".opt", ".opts":
-			vacask_options(nl, t, &user_opts)
+			vacask_options(nl, t, &vb.user_opts)
 		case:
 			append(&nl.warnings, fmt.tprintf("VACASK: \"%s\" is ignored (put VACASK lines in a directive starting with #vacask)", t))
 		}
 	}
-	if n_op + n_tran + n_ac + n_dc + n_noise == 0 && !strings.contains(strings.join(verbatim[:], "\n", context.temp_allocator), "analysis") {
+	if n_op + n_tran + n_ac + n_dc + n_noise == 0 && !strings.contains(strings.join(vb.verbatim[:], "\n", context.temp_allocator), "analysis") {
 		append(&nl.errors, "no analysis: add a .tran, .ac, .dc or .op directive (Simulate › Edit simulation command)")
 	}
-	// models: from directives, libraries and defaults
+}
+
+// .ic v(node)=value v(a,b)=value: initial conditions of the transient analyses.
+@(private = "file")
+vacask_ic_directives :: proc(nl: ^Netlist, dl: []string, vb: ^Vacask_Build) {
+	for l in dl {
+		t := strings.trim_space(l)
+		if !strings.has_prefix(lower(t), ".ic ") && !strings.has_prefix(lower(t), ".ic\t") do continue
+		f := strings.fields(replace_parens(t[3:]), context.temp_allocator)
+		for i := 0; i < len(f); {
+			if lower(f[i]) != "v" {i += 1; continue}
+			j := i + 1
+			nodes := make([dynamic]string, context.temp_allocator)
+			for j < len(f) && f[j] != "=" && f[j] != "," {append(&nodes, vacask_net(f[j])); j += 1}
+			if j + 1 < len(f) && f[j] == "=" && len(nodes) >= 1 {
+				append(&vb.dir_ic, vacask_ic_entry(nodes[0], nodes[1] if len(nodes) > 1 else "0", vacask_value(f[j + 1])))
+				i = j + 2
+			} else {
+				append(&nl.warnings, tcat("cannot read ", t))
+				break
+			}
+		}
+	}
+}
+
+// The analysis line of a .tran (the n-th), with its initial conditions; "" after an error.
+@(private = "file")
+vacask_tran :: proc(nl: ^Netlist, f: []string, n: int, vb: ^Vacask_Build) -> string {
+	pos := make([dynamic]string, context.temp_allocator)
+	uic := false
+	for x in f[1:] {
+		if lower(x) == "uic" do uic = true
+		else do append(&pos, x)
+	}
+	if len(pos) == 1 {
+		stop, _ := parse_eng(pos[0])
+		inject_at(&pos, 0, fmt.tprintf("%.6g", stop / 1000))
+	}
+	if len(pos) < 2 {
+		append(&nl.errors, ".tran needs a stop time")
+		return ""
+	}
+	a := fmt.tprintf("analysis tran%d tran step=%s stop=%s", n, vacask_value(pos[0]), vacask_value(pos[1]))
+	if len(pos) > 2 do a = tcat(a, " start=", vacask_value(pos[2]))
+	if len(pos) > 3 do a = tcat(a, " maxstep=", vacask_value(pos[3]))
+	else do a = tcat(a, " maxstep=", vacask_value(pos[0]))
+	if uic do a = tcat(a, " icmode=\"uic\"")
+	ics := make([dynamic]string, context.temp_allocator)
+	append(&ics, ..vb.dir_ic[:])
+	if uic do append(&ics, ..vb.cap_ic[:])
+	if len(ics) > 0 do a = tcat(a, " ic={", strings.join(ics[:], ", ", context.temp_allocator), "}")
+	return a
+}
+
+// The models (from the directives, the libraries and the defaults) and subcircuits, and the
+// directives' SPICE element lines.
+@(private = "file")
+vacask_models :: proc(nl: ^Netlist, s: ^Schematic, vb: ^Vacask_Build) {
 	defined := make(map[string]bool, 16, context.temp_allocator)
-	for m in model_cards {
+	for m in vb.model_cards {
 		ff := strings.fields(replace_parens(m), context.temp_allocator)
 		if len(ff) > 1 do defined[lower(ff[1])] = true
 	}
 	cards, defaults := needed_models(s, defined, nl.local)
 	all_cards := make([dynamic]string, context.temp_allocator)
-	append(&all_cards, ..model_cards[:])
-	vo := Vacask_Out{defs = strings.builder_make(context.temp_allocator), loads = &loads, models = &models, done = make(map[string]bool, 8, context.temp_allocator), local = nl.local}
+	append(&all_cards, ..vb.model_cards[:])
+	vb.out = Vacask_Out{defs = strings.builder_make(context.temp_allocator), loads = &vb.loads, models = &vb.models, done = make(map[string]bool, 8, context.temp_allocator), local = nl.local}
 	for e in cards {
 		if e.subckt {
-			vacask_subckt(nl, &vo, e)
+			vacask_subckt(nl, &vb.out, e)
 			continue
 		}
 		append(&all_cards, e.text)
 	}
-	for e in sub_needed do vacask_subckt(nl, &vo, e)
-	elem_lines := make([dynamic]string, context.temp_allocator)
-	for t in spice_elems {
-		line, err := vacask_directive_element(nl, &vo, t, defined)
+	for e in vb.sub_needed do vacask_subckt(nl, &vb.out, e)
+	for t in vb.spice_elems {
+		line, err := vacask_directive_element(nl, &vb.out, t, defined)
 		if len(err) > 0 {
 			append(&nl.errors, tcat("VACASK: ", err))
 			continue
 		}
-		append(&elem_lines, line)
+		append(&vb.elem_lines, line)
 	}
 	append(&all_cards, ..defaults[:])
 	for card in all_cards {
@@ -281,28 +344,33 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 			append(&nl.errors, err)
 			continue
 		}
-		add_unique(&loads, osdi)
-		add_unique(&models, line)
+		add_unique(&vb.loads, osdi)
+		add_unique(&vb.models, line)
 	}
+}
+
+// The netlist: loads, parameters, models, subcircuits, the parts, then the control block.
+@(private = "file")
+vacask_text :: proc(vb: ^Vacask_Build, sim: ^Simulator_Def, title: string) -> string {
 	b := strings.builder_make(context.temp_allocator)
 	fmt.sbprintf(&b, "%s\n\n", title)
-	for l in loads do fmt.sbprintf(&b, "load \"%s\"\n", l)
+	for l in vb.loads do fmt.sbprintf(&b, "load \"%s\"\n", l)
 	strings.write_byte(&b, '\n')
-	for p in params do fmt.sbprintf(&b, "%s\n", p)
-	for m in models do fmt.sbprintf(&b, "%s\n", m)
-	for name in used {
+	for p in vb.params do fmt.sbprintf(&b, "%s\n", p)
+	for m in vb.models do fmt.sbprintf(&b, "%s\n", m)
+	for name in vb.used {
 		sym := symbol_find(name)
 		if len(sym.vacask.defs) > 0 do fmt.sbprintf(&b, "\n%s\n", sym.vacask.defs)
 	}
-	strings.write_string(&b, strings.to_string(vo.defs))
+	strings.write_string(&b, strings.to_string(vb.out.defs))
 	strings.write_byte(&b, '\n')
-	strings.write_string(&b, strings.to_string(body))
-	for l in elem_lines do fmt.sbprintf(&b, "%s\n", l)
+	strings.write_string(&b, strings.to_string(vb.body))
+	for l in vb.elem_lines do fmt.sbprintf(&b, "%s\n", l)
 	for l in sim.lines do fmt.sbprintf(&b, "%s\n", l)
 	for l in S.extra_lines do fmt.sbprintf(&b, "%s\n", l)
 	ctrl_opts := make([dynamic]string, context.temp_allocator)
 	ctrl_extra := make([dynamic]string, context.temp_allocator)
-	for v in verbatim {
+	for v in vb.verbatim {
 		// user lines: control statements go into the control block, options before the
 		// analyses (VACASK applies them to the analyses that follow)
 		low := lower(v)
@@ -314,13 +382,21 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 			fmt.sbprintf(&b, "%s\n", v)
 		}
 	}
-	strings.write_string(&b, "\ncontrol\n  save default\n")
+	vacask_control(&b, vb, ctrl_opts[:], ctrl_extra[:])
+	return strings.to_string(b)
+}
+
+// The control block: options (spicy's for subcircuits and switches, then the schematic's),
+// the analyses; and the switch model's Verilog-A after it.
+@(private = "file")
+vacask_control :: proc(b: ^strings.Builder, vb: ^Vacask_Build, ctrl_opts, ctrl_extra: []string) {
+	strings.write_string(b, "\ncontrol\n  save default\n")
 	opts := make([dynamic][2]string, context.temp_allocator)
-	switches := strings.contains(strings.to_string(body), " spicy_vsw") || has_switch_model(models[:])
+	switches := strings.contains(strings.to_string(vb.body), " spicy_vsw") || has_switch_model(vb.models[:])
 	// translated SPICE subcircuits: converge on the solution only, as SPICE does (vendor
 	// models have milliohm parasitics whose KCL residual rounding exceeds abstol); likewise
 	// switches, whose off resistance (up to GΩ) leaves nodes almost floating
-	if len(vo.done) > 0 || switches do set_option(&opts, "nr_residualcheck", "0")
+	if len(vb.out.done) > 0 || switches do set_option(&opts, "nr_residualcheck", "0")
 	if switches {
 		// Hard switching (power converters): at every switch edge diodes commutate and
 		// nodes with no capacitance (diode–transformer nodes) jump. VACASK's defaults then
@@ -335,18 +411,17 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 		set_option(&opts, "tran_itl", "50")
 		set_option(&opts, "tran_redofactor", "10")
 	}
-	for o in user_opts do set_option(&opts, o[0], o[1])
+	for o in vb.user_opts do set_option(&opts, o[0], o[1])
 	if len(opts) > 0 {
-		strings.write_string(&b, "  options")
-		for o in opts do fmt.sbprintf(&b, " %s=%s", o[0], o[1])
-		strings.write_byte(&b, '\n')
+		strings.write_string(b, "  options")
+		for o in opts do fmt.sbprintf(b, " %s=%s", o[0], o[1])
+		strings.write_byte(b, '\n')
 	}
-	for c in ctrl_opts do fmt.sbprintf(&b, "  %s\n", c)
-	for c in control do fmt.sbprintf(&b, "  %s\n", c)
-	for c in ctrl_extra do fmt.sbprintf(&b, "  %s\n", c)
-	strings.write_string(&b, "endc\n")
-	for l in loads do if l == SPICY_VSW_FILE do fmt.sbprintf(&b, "\nembed \"%s\" <<<FILE\n%s>>>FILE\n", SPICY_VSW_FILE, SPICY_VSW_VA)
-	return strings.to_string(b)
+	for c in ctrl_opts do fmt.sbprintf(b, "  %s\n", c)
+	for c in vb.control do fmt.sbprintf(b, "  %s\n", c)
+	for c in ctrl_extra do fmt.sbprintf(b, "  %s\n", c)
+	strings.write_string(b, "endc\n")
+	for l in vb.loads do if l == SPICY_VSW_FILE do fmt.sbprintf(b, "\nembed \"%s\" <<<FILE\n%s>>>FILE\n", SPICY_VSW_FILE, SPICY_VSW_VA)
 }
 
 // The pins of a part that get a VACASK sense source (two-pin parts: the first pin).
