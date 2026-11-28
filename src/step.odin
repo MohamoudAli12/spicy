@@ -44,7 +44,10 @@ step_values :: proc(args: string) -> (vals: [dynamic]Step_Value, err: string) {
 	if count > STEP_MAX do return vals, fmt.tprintf("%d values, more than the %d allowed. %s", count, STEP_MAX, STEP_CORRECT)
 	for i in 0 ..< count {
 		v := start + f64(i) * incr
-		text := fmt.tprintf("%g", v)
+		// 0.1 + 0.2 is 0.30000000000000004: 12 digits drop the rounding error, and a value that
+		// should be 0 (-0.3 + 3 × 0.1) is 0
+		if abs(v) < abs(incr) * 1e-9 do v = 0
+		text := fmt.tprintf("%.12g", v)
 		append(&vals, Step_Value{label = tcat(name, "=", text), assign = tcat(name, "=", text)})
 	}
 	return vals, ""
@@ -72,17 +75,9 @@ step_netlist :: proc(text, assign: string, vacask: bool) -> string {
 			append(&out, l)
 			continue
 		}
-		changed := false
-		for &t in f[1:] {
-			if len(t) > len(name) && strings.equal_fold(t[:len(name)], name) && t[len(name)] == '=' {
-				t = tcat(name, "=", value)
-				changed = true
-				done = true
-			}
-		}
-		if changed {
-			lead := l[:len(l) - len(strings.trim_left_space(l))]
-			append(&out, tcat(lead, strings.join(f, " ", context.temp_allocator)))
+		if a, b, ok := param_value_span(l, name); ok {
+			append(&out, tcat(l[:a], value, l[b:]))
+			done = true
 		} else {
 			append(&out, l)
 		}
@@ -99,6 +94,57 @@ step_netlist :: proc(text, assign: string, vacask: bool) -> string {
 	cut := strings.last_index(text2, "\n.end")
 	if cut < 0 do return tcat(text2, "\n", line)
 	return tcat(text2[:cut + 1], line, text2[cut + 1:])
+}
+
+// Where the value of name is in a .param (or VACASK parameters) line: l[a:b]. The forms
+// "R=1k", "R = 1k" and "R={a + b}"; a value runs to the next "name=" outside braces, parentheses
+// and quotes.
+param_value_span :: proc(l, name: string) -> (a, b: int, ok: bool) {
+	Assign :: struct {at, value: int}
+	list := make([dynamic]Assign, context.temp_allocator)
+	t := strings.trim_left_space(l)
+	i := len(l) - len(t)
+	for i < len(l) && l[i] != ' ' && l[i] != '\t' do i += 1 // the keyword
+	depth := 0
+	quote: u8 = 0
+	for i < len(l) {
+		c := l[i]
+		switch {
+		case quote != 0:
+			if c == quote do quote = 0
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '{' || c == '(':
+			depth += 1
+		case c == '}' || c == ')':
+			depth = max(depth - 1, 0)
+		case depth == 0 && is_ident_start(c) && (i == 0 || !is_ident_char(l[i - 1])):
+			j := i
+			for j < len(l) && is_ident_char(l[j]) do j += 1
+			k := j
+			for k < len(l) && (l[k] == ' ' || l[k] == '\t') do k += 1
+			if k < len(l) && l[k] == '=' && (k + 1 >= len(l) || l[k + 1] != '=') {
+				v := k + 1
+				for v < len(l) && (l[v] == ' ' || l[v] == '\t') do v += 1
+				append(&list, Assign{i, v})
+				// the target is l[i:j]; go on from the value
+				i = v
+				continue
+			}
+			i = j
+			continue
+		}
+		i += 1
+	}
+	for e, n in list {
+		j := e.at
+		for j < len(l) && is_ident_char(l[j]) do j += 1
+		if !strings.equal_fold(l[e.at:j], name) do continue
+		end := list[n + 1].at if n + 1 < len(list) else len(l)
+		for end > e.value && (l[end - 1] == ' ' || l[end - 1] == '\t' || l[end - 1] == '\r') do end -= 1
+		return e.value, end, true
+	}
+	return 0, 0, false
 }
 
 // The .step lines of the schematic: at most one. Fills nl.steps.

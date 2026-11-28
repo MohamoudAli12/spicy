@@ -150,7 +150,7 @@ xyce_analyses :: proc(nl: ^Netlist, b: ^strings.Builder, s: ^Schematic, sim: ^Si
 			if open >= 0 && close > open && strings.contains(low[open:close], ",") {
 				append(&nl.errors, tcat(".noise \"", strings.trim_space(strings.trim_space(l)[len(".noise"):]), "\": Xyce does not accept a reference node in the output. Correct: .noise V(out) V1 dec 10 10 1Meg (or run V(out,ref) on ngspice)"))
 			}
-		} else if strings.has_prefix(low, ".tran") || strings.has_prefix(low, ".ac") || strings.has_prefix(low, ".dc") || strings.has_prefix(low, ".op") do others += 1
+		} else if is_analysis_cmd(directive_cmd(low), {".tran", ".ac", ".dc", ".op"}) do others += 1
 	}
 	nl.xyce_noise_only = noise && others == 0
 	if noise && others > 0 do append(&nl.warnings, "Xyce runs only the .noise analysis of this schematic: its .tran, .ac, .dc and .op are not run (use ngspice or VACASK to run them together)")
@@ -159,8 +159,8 @@ xyce_analyses :: proc(nl: ^Netlist, b: ^strings.Builder, s: ^Schematic, sim: ^Si
 	analysis := ""
 	for l in dl {
 		low := lower(strings.trim_space(l))
-		if strings.has_prefix(low, ".tran") do analysis = "tran"
-		else if strings.has_prefix(low, ".dc") && len(analysis) == 0 do analysis = "dc"
+		if directive_cmd(low) == ".tran" do analysis = "tran"
+		else if directive_cmd(low) == ".dc" && len(analysis) == 0 do analysis = "dc"
 	}
 	if len(analysis) > 0 && sim.raw != .Per_Analysis {
 		nl.xyce_print_raw = true

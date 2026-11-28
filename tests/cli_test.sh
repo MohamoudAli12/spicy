@@ -429,6 +429,9 @@ printf '%s\n' '{:spicy-schematic 1 :components [{:symbol "res" :ref "R1" :value 
 	' :flags [{:name "0" :at [16 16]} {:name "0" :at [16 96]}]' \
 	' :texts [{:at [0 200] :text ".op\n.include nowhere.lib" :directive true}]}' >"$work/inc.edn"
 check "missing include"      "$bin" --netlist "$work/inc.edn" "file not found"
+# .options is not an analysis (it starts with ".op")
+sed 's/:text ".tran 20u"/:text ".options reltol=1e-4"/' "$work/rc_lowpass.edn" >"$work/opts.edn"
+check "options, no analysis" "$bin" --netlist "$work/opts.edn" "no analysis"
 
 # a .step run whose second (last) value no simulator takes
 sed 's/:value "1k" :at \[288 0\]/:value "{rv}" :at [288 0]/; s/:text ".tran 20u"/:text ".tran 20u\\n.param rv=1k\\n.step param rv list 1k 1k*"/' "$work/rc_lowpass.edn" >"$work/badstep.edn"

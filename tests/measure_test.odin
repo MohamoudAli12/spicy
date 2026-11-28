@@ -67,6 +67,36 @@ step_forms :: proc(t: ^testing.T) {
 	// VACASK: a parameter an analysis uses is a control block variable too: both change
 	out = C.step_netlist("parameters ts=20u\ncontrol\n  var ts=20u\n  analysis tran1 tran step=(ts)/1000 stop=ts\nendc\n", "ts=40u", true)
 	testing.expect_value(t, out, "parameters ts=40u\ncontrol\n  var ts=40u\n  analysis tran1 tran step=(ts)/1000 stop=ts\nendc\n")
+	// LTspice's spaced form, and an expression with spaces: changed in place, not a second line
+	out = C.step_netlist("* t\n.param R = 1k C=1n\n.end\n", "R=2k", false)
+	testing.expect_value(t, out, "* t\n.param R = 2k C=1n\n.end\n")
+	out = C.step_netlist("* t\n.param C=1n R={a + b} L = 1u\n.end\n", "R=2k", false)
+	testing.expect_value(t, out, "* t\n.param C=1n R=2k L = 1u\n.end\n")
+	out = C.step_netlist("* t\n.param RR=5 R2={R*2}\n.end\n", "R=2k", false)
+	testing.expect_value(t, out, "* t\n.param RR=5 R2={R*2}\n.param R=2k\n.end\n")
+	// a range's values without the rounding error of floating point
+	z, err3 := C.step_values("param C -0.3 0.3 0.1")
+	testing.expect_value(t, err3, "")
+	testing.expect_value(t, len(z), 7)
+	if len(z) == 7 {
+		testing.expect_value(t, z[3].label, "C=0")
+		testing.expect_value(t, z[6].label, "C=0.3")
+		testing.expect_value(t, z[5].assign, "C=0.2")
+	}
+}
+
+@(test)
+analysis_words :: proc(t: ^testing.T) {
+	// ".options" starts with ".op" but is not an operating point
+	testing.expect(t, !C.is_analysis_line(".options reltol=1e-4"), ".options is not an analysis")
+	testing.expect(t, !C.is_analysis_line(".option gmin=1e-12"), ".option is not an analysis")
+	testing.expect(t, C.is_analysis_line("  .OP"), ".OP is one")
+	testing.expect(t, C.is_analysis_line(".tran 1u 1m"), ".tran is one")
+	s: C.Schematic
+	append(&s.texts, C.Text{text = ".options reltol=1e-4\n.tran 1u 1m", directive = true})
+	ti, li := C.find_analysis(&s)
+	testing.expect_value(t, ti, 0)
+	testing.expect_value(t, li, 1)
 }
 
 // x = 0 1 2 3 4, y = 0 1 2 1 0

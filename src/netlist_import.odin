@@ -26,7 +26,7 @@ is_circuit_netlist :: proc(text: string) -> bool {
 	for l in lines {
 		low := lower(l)
 		if strings.has_prefix(low, ".model") || strings.has_prefix(low, ".subckt") do defines = true
-		for a in ([]string{".tran", ".ac ", ".dc ", ".op", ".noise", ".tf ", ".four", ".pz", ".sens", ".disto"}) do if strings.has_prefix(low, a) do analysis = true
+		if is_analysis_cmd(directive_cmd(low), {".tran", ".ac", ".dc", ".op", ".noise", ".tf", ".four", ".pz", ".sens", ".disto"}) do analysis = true
 	}
 	if defines && !analysis do return false
 	depth := 0

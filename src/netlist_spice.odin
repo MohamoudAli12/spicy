@@ -72,7 +72,7 @@ netlist_spice :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: s
 	for l in dl {
 		low := lower(strings.trim_space(l))
 		if low == ".end" do continue
-		for a in ([?]string{".tran", ".ac", ".dc", ".op", ".noise", ".tf", ".pz", ".sens", ".disto"}) do if strings.has_prefix(low, a) do have_analysis = true
+		if is_analysis_cmd(directive_cmd(l)) do have_analysis = true
 		if p, inc := include_path(l, nl.base_dir); inc && !file_exists(p) {
 			has := false
 			for e in s.embedded do if e.from == base_name(p) do has = true
@@ -87,6 +87,27 @@ netlist_spice :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: s
 	if !have_analysis do append(&nl.errors, "no analysis: add a .tran, .ac, .dc or .op directive (Simulate › Edit simulation command)")
 	strings.write_string(&b, ".end\n")
 	return strings.to_string(b)
+}
+
+// The command of a directive line, lowercase (".tran" of ".TRAN 1m 10m"); "" for a blank line.
+directive_cmd :: proc(l: string) -> string {
+	t := strings.trim_left_space(l)
+	end := 0
+	for end < len(t) && t[end] != ' ' && t[end] != '\t' && t[end] != '\r' do end += 1
+	return lower(t[:end])
+}
+
+ANALYSIS_CMDS :: [?]string{".tran", ".ac", ".dc", ".op", ".noise", ".tf", ".pz", ".sens", ".disto"}
+
+// An analysis command: the whole word, so that ".options" is not ".op".
+is_analysis_cmd :: proc(cmd: string, among: []string = nil) -> bool {
+	list := among
+	if list == nil {
+		all := ANALYSIS_CMDS
+		list = all[:]
+	}
+	for a in list do if cmd == a do return true
+	return false
 }
 
 // A library card into a SPICE netlist, each line without its indent: Xyce takes an indented

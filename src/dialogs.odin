@@ -261,8 +261,7 @@ source_build :: proc() -> string {
 ANALYSES := [?]string{"Transient", "AC sweep", "DC sweep", "Operating point"}
 
 is_analysis_line :: proc(l: string) -> bool {
-	t := lower(strings.trim_space(l))
-	return strings.has_prefix(t, ".tran") || strings.has_prefix(t, ".ac") || strings.has_prefix(t, ".dc") || strings.has_prefix(t, ".op")
+	return is_analysis_cmd(directive_cmd(l), {".tran", ".ac", ".dc", ".op"})
 }
 
 // The directive text and line that hold the analysis, or -1.
@@ -290,7 +289,7 @@ sim_cmd_load :: proc(d: ^Doc) {
 	cmd := lower(tok[0])
 	args := tok[1:]
 	switch {
-	case strings.has_prefix(cmd, ".tran"):
+	case cmd == ".tran":
 		dl.sim_tab = 0
 		// .tran [tstep] tstop [tstart [tmax]]
 		if len(args) == 1 do set_str(&dl.f[1], args[0])
@@ -299,15 +298,15 @@ sim_cmd_load :: proc(d: ^Doc) {
 		}
 		if len(args) >= 3 do set_str(&dl.f[2], args[2])
 		if len(args) >= 4 do set_str(&dl.f[7], args[3])
-	case strings.has_prefix(cmd, ".ac"):
+	case cmd == ".ac":
 		dl.sim_tab = 1
 		if len(args) >= 4 {
 			set_str(&dl.f[3], lower(args[0])); set_str(&dl.f[4], args[1]); set_str(&dl.f[5], args[2]); set_str(&dl.f[6], args[3])
 		}
-	case strings.has_prefix(cmd, ".dc"):
+	case cmd == ".dc":
 		dl.sim_tab = 2
 		for a, i in args do if i < 4 do set_str(&dl.f[i], a)
-	case strings.has_prefix(cmd, ".op"):
+	case cmd == ".op":
 		dl.sim_tab = 3
 	}
 }
