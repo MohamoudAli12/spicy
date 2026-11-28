@@ -113,6 +113,25 @@ cli_datasheet :: proc(args: []string) {
 	}
 }
 
+// --spice-model <file.edn> <REF> [--sim name]: the SPICE model a part uses, as the netlist
+// takes it, and the models and subcircuits it uses (the text of Show SPICE model).
+cli_spice_model :: proc(args: []string) {
+	USE :: "usage: spicy --spice-model <file.edn> <REF> [--sim <simulator>]"
+	if len(args) < 3 do cli_usage(USE)
+	for i := 3; i < len(args); i += 1 {
+		if args[i] == "--sim" && i + 1 < len(args) do i += 1
+		else do cli_usage(tcat(USE, "   (unknown option ", args[i], ")"))
+	}
+	p := abs_path(args[1])
+	sch, _, err := load_schematic_file(p)
+	if len(err) > 0 do cli_fail(EXIT_FILE, "parse", err)
+	ci := find_comp(&sch, args[2])
+	if ci < 0 do cli_fail(EXIT_PROBLEMS, "not-found", tcat("no part ", args[2]))
+	_, text, msg := comp_model_text(&sch, ci, cli_sim(&sch, args), dir_of(p))
+	if len(msg) > 0 do cli_fail(EXIT_PROBLEMS, "no-model", msg)
+	fmt.print(text)
+}
+
 // --model-info <model> [field=value …] [--forget]: a model of the catalog; the fields given
 // are kept as the user's (model-info.edn), --forget drops them all.
 cli_model_info :: proc(args: []string) {

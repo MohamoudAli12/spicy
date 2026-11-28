@@ -843,6 +843,7 @@ cli_main :: proc(args: []string) -> bool {
 		case "--embed": load_config(); cli_embed(args)
 		case "--model-info": load_config(); cli_model_info(args)
 		case "--datasheet": load_config(); cli_datasheet(args)
+		case "--spice-model": load_config(); cli_spice_model(args)
 		case "--import-model", "--check-model": load_config(); cli_import_model(args)
 		case "--import-asc": load_config(); cli_import_asc(args)
 		case: return false

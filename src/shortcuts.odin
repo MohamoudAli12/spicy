@@ -57,6 +57,7 @@ ACTION_INFO := [?]Action_Info {
 	{"edit/mirror", "Mirror (also while placing)", .Schematic, false},
 	{"edit/properties", "Edit the selected part, label or text", .Schematic, false},
 	{"edit/datasheet", "Open the selected part's datasheet", .Schematic, false},
+	{"edit/spice-model", "Show the selected part's SPICE model", .Schematic, false},
 	{"edit/cancel", "Stop placing or drawing, leave probe mode, deselect", .Global, false},
 	{"place/wire", "Draw wires", .Schematic, false},
 	{"place/label", "Place a net label", .Schematic, false},

@@ -450,6 +450,22 @@ grep -qx "https://example.com/1n4148.pdf" "$work/opened.txt" 2>/dev/null && pass
 "$bin" --set "$dsp" D1.datasheet=docs/gone.pdf >/dev/null
 check "datasheet: --open a missing file" env SPICY_OPEN_WITH="$work/openwith.sh" "$bin" --datasheet "$dsp" D1 --open "datasheet not found: $work/dsp/docs/gone.pdf"
 "$bin" --model-info 1N4148 --forget >/dev/null
+# a part's SPICE model (Show SPICE model): as the netlist takes it, then what it uses, in turn
+check "spice model: built-in"  "$bin" --spice-model "$root/examples/rc_lowpass.edn" D1 ".model 1N4148 D(IS=2.52n"
+check "spice model: symbol's"  "$bin" --spice-model "$root/examples/opamp_inverting.edn" U1 "defined by the symbol opamp"
+printf '%s\n' '{:spicy-schematic 1 :components [{:symbol "opamp" :ref "U1" :value "MYAMP" :at [0 0]} {:symbol "diode" :ref "D2" :value "NOPE" :at [0 96]}]' \
+	' :texts [{:at [0 200] :text ".subckt MYAMP inp inn out\nD1 inp inn MYD\nX1 inp out MYBUF\n.ends\n.subckt MYBUF a b\nD9 a b 1N4148\n.ends\n.model MYD D(IS=1n)" :directive true}]}' >"$work/sm.edn"
+want=$(printf '%s\n' '* MYAMP, from a directive in this schematic' '.subckt MYAMP inp inn out' 'D1 inp inn MYD' 'X1 inp out MYBUF' '.ends' '' \
+	'* used by it: MYD, from a directive in this schematic' '.model MYD D(IS=1n)' '' \
+	'* used by it: MYBUF, from a directive in this schematic' '.subckt MYBUF a b' 'D9 a b 1N4148' '.ends' '' \
+	"* used by it: 1N4148, from spicy's built-in models")
+got=$("$bin" --spice-model "$work/sm.edn" U1 2>&1 | head -15)
+[ "$got" = "$want" ] && pass "spice model: and what it uses" || { fail "spice model: and what it uses"; diff <(echo "$want") <(echo "$got") | sed 's/^/     /'; }
+check "spice model: not found" "$bin" --spice-model "$work/sm.edn" D2 "D2: model NOPE not found"
+"$bin" --spice-model "$work/sm.edn" D2 >/dev/null 2>&1; [ $? = 1 ] && pass "spice model: not found exits 1" || fail "spice model: not found exits 1"
+check "spice model: no model"  "$bin" --spice-model "$root/examples/rc_lowpass.edn" R1 "R1 (Resistor) has no model"
+check "spice model: no part"   "$bin" --spice-model "$root/examples/rc_lowpass.edn" Q9 "no part Q9"
+check "spice model: bad option" "$bin" --spice-model "$root/examples/rc_lowpass.edn" D1 --nope "unknown option --nope"
 sed 's/"MYD"/"MYDX"/' "$work/fet.edn" >"$work/typo.edn"
 check "missing model"        "$bin" --netlist "$work/typo.edn" "D1: model MYDX not found"
 printf '%s\n' '{:spicy-schematic 1 :components [{:symbol "res" :ref "R1" :value "1k" :at [0 0]}]' \

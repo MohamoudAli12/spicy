@@ -71,6 +71,25 @@ if ! grep -qF '{"1n4742" {:I 0.2 :datasheet "https://example.com/1n4742.pdf"}}' 
 	cat "$work/cfg/data/model-info.edn" 2>&1 | tail -5
 	exit 1
 fi
+# Enter in the editor's datasheet field saves it, and does not place the model too (it did: the
+# Enter that ended the typing was Place's, and what was typed was lost)
+placed() { grep -c "placing zener with the model 1N4742" "$work/cfg/state/spicy.log"; }
+n=$(placed)
+run dsenter "place/component;type:1N4742;click:0.307,0.33;click:0.3,0.254;click:0.464,0.799;type:https://example.com/enter.pdf;key:enter"
+shots="$shots dsenter"
+if ! grep -qF ':datasheet "https://example.com/enter.pdf"' "$work/cfg/data/model-info.edn" 2>/dev/null || [ "$(placed)" != "$n" ]; then
+	echo "FAIL: Enter in the model table's datasheet field: not saved, or the model placed ($n placings before, $(placed) after)"
+	cat "$work/cfg/data/model-info.edn" 2>&1 | tail -3
+	exit 1
+fi
+# typed and not saved, then Place: kept with the model placed
+run dsplace "place/component;type:1N4742;click:0.307,0.33;click:0.3,0.254;click:0.464,0.799;type:https://example.com/place.pdf;click:0.826,0.843"
+shots="$shots dsplace"
+if ! grep -qF ':datasheet "https://example.com/place.pdf"' "$work/cfg/data/model-info.edn" 2>/dev/null || [ "$(placed)" != "$((n + 1))" ]; then
+	echo "FAIL: a datasheet typed in the model table and then Place: not saved, or not placed"
+	cat "$work/cfg/data/model-info.edn" 2>&1 | tail -3
+	exit 1
+fi
 # a datasheet: Browse… in D1's editor starts in the schematic's folder; its PDF picked, OK and
 # saved, it is kept relative to the schematic. Then Open datasheet in D1's menu opens it (with
 # the program SPICY_OPEN_WITH names: one that notes what it was given)
@@ -91,6 +110,14 @@ shots="$shots dsopen"
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$work/opened.txt" ] && break; sleep 0.1; done
 if ! grep -qx "$work/ds/d1.pdf" "$work/opened.txt" 2>/dev/null; then
 	echo "FAIL: Open datasheet in D1's menu did not open $work/ds/d1.pdf (got: $(cat "$work/opened.txt" 2>/dev/null))"
+	exit 1
+fi
+# Show SPICE model in D1's menu: its card in the text window
+run spicemodel "rclick:0.774,0.4;click:0.813,0.709" "$work/ds/g.edn"
+shots="$shots spicemodel"
+if ! grep -q "showing D1: the SPICE model 1N4148" "$work/cfg/state/spicy.log"; then
+	echo "FAIL: Show SPICE model in D1's menu did not show 1N4148's model"
+	grep -i "showing\|error" "$work/cfg/state/spicy.log" | tail -5
 	exit 1
 fi
 # menu items picked as a click picks them: an action, a submenu item (saved in settings.edn)

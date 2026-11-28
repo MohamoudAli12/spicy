@@ -436,7 +436,7 @@ run_action :: proc(name: string) {
 		sch_mirror(d)
 	case "edit/properties":
 		sch_edit_selected(d)
-	case "edit/datasheet":
+	case "edit/datasheet", "edit/spice-model":
 		ci := -1
 		for c, i in d.sch.comps do if c.sel {
 			if ci >= 0 {
@@ -445,8 +445,10 @@ run_action :: proc(name: string) {
 			}
 			ci = i
 		}
-		if ci < 0 do status("select one part to open its datasheet", true)
-		else do comp_open_datasheet(d, ci)
+		ds := name == "edit/datasheet"
+		if ci < 0 do status(tcat("select one part to ", "open its datasheet" if ds else "see its SPICE model"), true)
+		else if ds do comp_open_datasheet(d, ci)
+		else do comp_show_model(d, ci)
 	case "edit/cancel":
 		sch_cancel(d)
 	case "place/wire":
@@ -692,7 +694,7 @@ menu_entries :: proc(name: string) -> []Menu_Entry {
 		sep(&items)
 		act(&items, "Cut", "edit/cut"); act(&items, "Copy", "edit/copy"); act(&items, "Paste", "edit/paste"); act(&items, "Duplicate", "edit/duplicate"); act(&items, "Delete", "edit/delete")
 		sep(&items)
-		act(&items, "Select all", "edit/select-all"); act(&items, "Rotate", "edit/rotate"); act(&items, "Mirror", "edit/mirror"); act(&items, "Properties…", "edit/properties"); act(&items, "Datasheet", "edit/datasheet")
+		act(&items, "Select all", "edit/select-all"); act(&items, "Rotate", "edit/rotate"); act(&items, "Mirror", "edit/mirror"); act(&items, "Properties…", "edit/properties"); act(&items, "Datasheet", "edit/datasheet"); act(&items, "SPICE model", "edit/spice-model")
 	case "Place":
 		act(&items, "Part…", "place/component"); act(&items, "Wire", "place/wire"); act(&items, "Ground", "place/ground"); act(&items, "Net label…", "place/label")
 		act(&items, "SPICE directive…", "place/directive"); act(&items, "Comment…", "place/comment"); act(&items, "Import SPICE model…", "file/import-model"); act(&items, "New symbol…", "symbol/new")
@@ -1256,7 +1258,7 @@ gui_main :: proc(files: []string) {
 		if frames == 3 && len(test_actions) > 0 {
 			for a in strings.split(test_actions, ";", context.temp_allocator) {
 				// after a click or typing, an action waits its turn (file/save after an edit)
-				is_event := strings.has_prefix(a, "click:") || strings.has_prefix(a, "dblclick:") || strings.has_prefix(a, "rclick:") || strings.has_prefix(a, "type:")
+				is_event := strings.has_prefix(a, "click:") || strings.has_prefix(a, "dblclick:") || strings.has_prefix(a, "rclick:") || strings.has_prefix(a, "type:") || strings.has_prefix(a, "key:")
 				if !is_event && len(test_events) > 0 {
 					append(&test_events, Test_Event{kind = .Action, text = strings.clone(a)})
 					continue
@@ -1393,11 +1395,22 @@ test_action :: proc(a: string) {
 			fx, _ := parse_eng(xy[0])
 			fy, _ := parse_eng(xy[1])
 			append(&test_events, Test_Event{kind = kind, pos = {f32(fx), f32(fy)}})
-			test_ev_frame = -1
+			if test_ev_frame == -2 do test_ev_frame = -1 // (not while playing: it would wait for frame 22 again)
 		}
 	case strings.has_prefix(a, "type:"): // type:1N4742: typed into the focused field, in turn with the clicks
 		append(&test_events, Test_Event{kind = .Type, text = strings.clone(a[5:])})
-		test_ev_frame = -1
+		if test_ev_frame == -2 do test_ev_frame = -1
+	case strings.has_prefix(a, "key:"): // key:enter (or escape, tab): pressed, in turn with the clicks
+		k := rl.KeyboardKey.KEY_NULL
+		switch lower(a[4:]) {
+		case "enter": k = .ENTER
+		case "escape": k = .ESCAPE
+		case "tab": k = .TAB
+		}
+		if k != .KEY_NULL {
+			append(&test_events, Test_Event{kind = .Key, key = k})
+			if test_ev_frame == -2 do test_ev_frame = -1
+		} else do log.warnf("SPICY_ACTIONS: unknown key %s", a[4:])
 	case strings.has_prefix(a, "menu:"): // menu:View/UI scale/150 %: picks a menu item as a click does
 		test_menu_pick(a[5:])
 	case strings.has_prefix(a, "in-waves:"): // run inside the waveform window

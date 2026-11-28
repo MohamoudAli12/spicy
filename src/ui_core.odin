@@ -286,24 +286,26 @@ Window_Input :: struct {
 
 win_input: ^Window_Input
 
-// test hooks (SPICY_ACTIONS click:x,y, dblclick:x,y, rclick:x,y, type:text): played in turn
-// after the run, through the same input as the mouse and keyboard
-Test_Event_Kind :: enum u8 {Click, Double, Right, Type, Action}
+// test hooks (SPICY_ACTIONS click:x,y, dblclick:x,y, rclick:x,y, type:text, key:enter): played
+// in turn after the run, through the same input as the mouse and keyboard
+Test_Event_Kind :: enum u8 {Click, Double, Right, Type, Key, Action}
 Test_Event :: struct {
 	kind: Test_Event_Kind,
 	pos:  [2]f32, // fractions of the window
 	text: string,
+	key:  rl.KeyboardKey,
 }
 TEST_EVENT_FRAMES :: 6
 test_events: [dynamic]Test_Event
 test_ev_frame := -2 // -2 off, -1 waiting for the run, then the frame of the first event
 test_mouse: Maybe([2]f32) // after a click the mouse stays there (the screenshot shows its hover)
+test_key: rl.KeyboardKey // a key:… event: pressed for one frame
 
 test_events_pending :: proc() -> bool {return test_ev_frame != -2 && len(test_events) > 0}
 
 key_pressed :: proc(k: rl.KeyboardKey) -> bool {
 	if win_input != nil do return int(k) >= 0 && int(k) < 512 && win_input.khit[int(k)]
-	return rl.IsKeyPressed(k)
+	return rl.IsKeyPressed(k) || (test_key != .KEY_NULL && test_key == k)
 }
 key_repeated :: proc(k: rl.KeyboardKey) -> bool {
 	if win_input != nil do return int(k) >= 0 && int(k) < 512 && win_input.krep[int(k)]
@@ -432,9 +434,12 @@ test_event_frame :: proc() {
 	if test_ev_frame >= 0 && len(test_events) > 0 {
 		ev := test_events[0]
 		f := test_ev_frame
+		test_key = .KEY_NULL
 		switch ev.kind {
 		case .Type:
 			if f == 0 do for c in ev.text do append(&ui.chars, c)
+		case .Key:
+			if f == 0 do test_key = ev.key
 		case .Action:
 			if f == 0 do test_action(ev.text)
 		case .Click, .Double, .Right:

@@ -34,6 +34,9 @@ usage:
                                            where a part's datasheet is (its own, else its model's);
                                            --open opens it (PDF viewer or browser). Give a part one
                                            with --set <file.edn> REF.datasheet=<file or link>
+  spicy --spice-model <file.edn> <REF> [--sim <simulator>]
+                                           the SPICE model a part uses (as the netlist takes it),
+                                           with the models and subcircuits it uses
   spicy --set-program <simulator> <path>   the program a simulator runs (saved in settings.edn)
   spicy --paths                            where settings, symbols, models and logs live
   spicy --diagnostics                      versions, paths and environment (for bug reports)

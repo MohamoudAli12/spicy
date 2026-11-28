@@ -424,13 +424,16 @@ draw_model_table :: proc(d: ^Doc) {
 	scroll_end("mt.rows", lr, f32(len(mt.shown)) * ih)
 	if len(mt.shown) == 0 do text_in({lr.x, lr.y + 8, lr.w, fs() * 2}, "No model matches." if len(mt.rows) > 0 else "No models: import a SPICE model file (File › Import SPICE model…).", th.muted, 1)
 
-	mt_editor(ed, sel_row)
+	ed_enter := mt_editor(ed, sel_row)
 
 	// count, Cancel, Place / Use
 	text_in(bot, fmt_count(len(mt.shown), len(mt.rows)), th.muted, 0, fs(0.9), 0)
 	ok := "Place" if mt.place else "Use"
 	res := buttons(&bot, ok, true, sel_row != nil)
+	if ed_enter && res > 0 do res = 0 // Enter in the editor saved it: no placing too
 	if picked && sel_row != nil do res = 1
+	// what was typed in the editor and not saved is kept with the model placed or used
+	if res > 0 && sel_row != nil && mt.ed_key == sel_row.key && mt_dirty(sel_row) do mt_save(sel_row)
 	if res < 0 {
 		mt_close()
 		return
@@ -466,15 +469,21 @@ mt_close :: proc() {
 }
 
 // Under the table: the kind, ratings and description of the selected model, which the user
-// can give where the file says nothing (or says it wrong). Kept in model-info.edn.
+// can give where the file says nothing (or says it wrong). Kept in model-info.edn: by Save,
+// Enter in one of its fields (true: the Enter is taken), or Place / Use.
 @(private = "file")
-mt_editor :: proc(r: Rect, row: ^Catalog_Row) {
+mt_editor :: proc(r: Rect, row: ^Catalog_Row) -> (enter: bool) {
 	b := r
 	fill_round(b, th.hover, 6)
 	b = r_inset(b, 7)
 	if row == nil {
 		text_in(b, "Select a model to give it the kind, ratings, description or datasheet its file does not state.", th.muted, 0, fs(0.9), 4)
 		return
+	}
+	// Enter in a field of the editor (seen before the field ends its editing)
+	if (key_pressed(.ENTER) || key_pressed(.KP_ENTER)) && ui.focus != 0 {
+		enter = ui.focus == id_of("mt.ed.desc") || ui.focus == id_of("mt.ed.sheet")
+		for q in Rating do if ui.focus == id_of(tcat("mt.ed.", RATING_KEY[q])) do enter = true
 	}
 	if mt.ed_key != row.key {
 		// a newly selected model: its values into the fields
@@ -525,15 +534,40 @@ mt_editor :: proc(r: Rect, row: ^Catalog_Row) {
 	lab(&l3, "Datasheet")
 	text_field("mt.ed.sheet", l3, &mt.ed_sheet, "a PDF file or a https:// link")
 	if button("mt.ed.browse", bb, browse_l, tip = "Pick a datasheet file (Save keeps it for this model)") do datasheet_browse(.Model_Table, mt.ed_sheet, "")
-	if button("mt.ed.open", ob, open_l, len(strings.trim_space(mt.ed_sheet)) > 0, tip = "Open the datasheet: a file in your PDF viewer, a link in your browser") {
+	// (the text being typed counts: it is the field's once the click on Open ends the editing)
+	typed := string(ui.edit_buf[:]) if field_focused("mt.ed.sheet") else mt.ed_sheet
+	if button("mt.ed.open", ob, open_l, len(strings.trim_space(typed)) > 0, tip = "Open the datasheet: a file in your PDF viewer, a link in your browser") {
 		if e := datasheet_open(mt.ed_sheet, ""); len(e) > 0 do status_error(e)
 	}
-	if button("mt.ed.save", sb, save_l, tip = "Keep these for this model (in model-info.edn; the model file is not changed)") do mt_save(row)
+	// Save stands out while something is not saved (Place / Use saves it too)
+	dirty := mt_dirty(row) || enter || mt_typing_change()
+	if enter do mt_save(row)
+	else if button("mt.ed.save", sb, save_l, primary = dirty, tip = "Keep these for this model (in model-info.edn; the model file is not changed). Enter in a field, and Place, save them too.") do mt_save(row)
 	if button("mt.ed.reset", rb, reset_l, card(row.mine) > 0, tip = "Forget what you gave this model: the file's kind and ratings, no datasheet") {
 		if e := model_info_put(row.key, {}); len(e) > 0 do status_error(e)
 		else do status(tcat(row.name, ": the file's values"))
 		mt.ed_key = ""
 	}
+	return
+}
+
+// The editor's fields differ from what the model has (they are not saved).
+@(private = "file")
+mt_dirty :: proc(row: ^Catalog_Row) -> bool {
+	if mt.ed_kind < len(mt.ed_kinds) && mt.ed_kinds[mt.ed_kind] != row.kind do return true
+	for q in Rating do if q in device_ratings(row.file_kind) && strings.trim_space(mt.ed_val[q]) != rating_text(row.rating[q], q) do return true
+	return strings.trim_space(mt.ed_desc) != row.desc || strings.trim_space(mt.ed_sheet) != row.sheet
+}
+
+// A field of the editor being typed in holds other text than its value.
+@(private = "file")
+mt_typing_change :: proc() -> bool {
+	if ui.focus == 0 do return false
+	t := string(ui.edit_buf[:])
+	if field_focused("mt.ed.desc") do return t != mt.ed_desc
+	if field_focused("mt.ed.sheet") do return t != mt.ed_sheet
+	for q in Rating do if field_focused(tcat("mt.ed.", RATING_KEY[q])) do return t != mt.ed_val[q]
+	return false
 }
 
 // The editor's fields are kept (what differs from the file: model_info_set).
