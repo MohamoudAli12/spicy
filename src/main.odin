@@ -26,6 +26,10 @@ usage:
   spicy --check-model <file>               report a model file's faults and what --repair would do
   spicy --embed <file.edn> [--update]      save copies of the models and symbols it uses in it
                                            (--update: the library's versions of those that differ)
+  spicy --model-info <model> [field=value …] [--forget]
+                                           a model's kind and ratings (as --list models); give
+                                           fields (kind V I P R T F desc) the model file does not
+                                           state, or --forget them (kept in model-info.edn)
   spicy --set-program <simulator> <path>   the program a simulator runs (saved in settings.edn)
   spicy --paths                            where settings, symbols, models and logs live
   spicy --diagnostics                      versions, paths and environment (for bug reports)

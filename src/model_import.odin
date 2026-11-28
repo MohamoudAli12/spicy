@@ -298,8 +298,8 @@ auto_symbol :: proc(e: ^Lib_Entry, name, file: string) -> string {
 }
 
 // An op-amp triangle for a subcircuit whose terminals are two inputs and an output, with
-// or without the two supplies (nothing else).
-@(private = "file")
+// or without the two supplies (nothing else); false for another subcircuit (the model
+// catalog asks so).
 opamp_symbol :: proc(e: ^Lib_Entry, name, file: string) -> (string, bool) {
 	n := len(e.pins)
 	if n != 3 && n != 5 do return "", false

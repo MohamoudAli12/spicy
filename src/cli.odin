@@ -1,6 +1,7 @@
 package spicy
 
 import "core:fmt"
+import "core:math"
 import "core:os"
 import "core:strconv"
 import "core:strings"
@@ -552,6 +553,24 @@ cli_do :: proc(path: string, args: []string) {
 	cli_fail(EXIT_USAGE, "usage", tcat("unknown action ", action, " (spicy --list actions)"))
 }
 
+// A model catalog row (--list models, --model-info).
+em_catalog_row :: proc(r: ^Catalog_Row) {
+	em_map()
+	em_key("name"); em_str(r.name)
+	em_key("kind"); em_str(r.kind)
+	em_key("symbol"); em_str(r.symbol)
+	for q in Rating do if !math.is_nan(r.rating[q]) {em_key(RATING_KEY[q]); em_num(r.rating[q])}
+	if len(r.desc) > 0 {em_key("description"); em_str(r.desc)}
+	em_key("file"); em_str(r.file)
+	if card(r.mine) > 0 {
+		em_key("yours")
+		em_vec()
+		for f in Row_Field do if f in r.mine do em_str(ROW_FIELD_KEY[f])
+		em_vec_end()
+	}
+	em_map_end()
+}
+
 @(private = "file")
 cli_list :: proc(args: []string) {
 	pos := positional(args)
@@ -600,7 +619,21 @@ cli_list :: proc(args: []string) {
 			em_map_end()
 		}
 		em_vec_end()
-	case: cli_usage("--list symbols|actions|simulators")
+	case "models":
+		// the model catalog (the parts picker's tiles, the model table); a kind narrows it
+		kind := pos[1] if len(pos) > 1 else ""
+		if len(kind) > 0 && kind_def(kind) == nil {
+			names := make([dynamic]string, context.temp_allocator)
+			for k in KINDS do append(&names, k.name)
+			cli_usage(tcat("--list models [kind]: kinds are ", strings.join(names[:], " ", context.temp_allocator)))
+		}
+		em_vec()
+		for &r in catalog_rows() {
+			if len(kind) > 0 && r.kind != kind do continue
+			em_catalog_row(&r)
+		}
+		em_vec_end()
+	case: cli_usage("--list symbols|actions|simulators|models")
 	}
 	em_print()
 }
@@ -808,6 +841,7 @@ cli_main :: proc(args: []string) -> bool {
 		case "--check-config": load_config(); cli_check_config()
 		case "--set-program": load_config(); cli_set_program(args)
 		case "--embed": load_config(); cli_embed(args)
+		case "--model-info": load_config(); cli_model_info(args)
 		case "--import-model", "--check-model": load_config(); cli_import_model(args)
 		case "--import-asc": load_config(); cli_import_asc(args)
 		case: return false

@@ -4,6 +4,28 @@
 * first checks: use the manufacturer's model for real design work. Add your own libraries
 * with :simulation {:model-libraries ["/path/to/my.lib"]} in settings.edn.
 
+* Kinds and ratings for spicy's model table, in the vendors' "*SRC=part;model;kind;…" form
+* (datasheet maximum ratings; the models above are approximations of these parts):
+*SRC=1N4148;1N4148;Diodes;Switching;  100V  0.200A  4.00ns   Small-signal switching diode
+*SRC=1N914;1N914;Diodes;Switching;  100V  0.200A  4.00ns   Small-signal switching diode
+*SRC=1N4007;1N4007;Diodes;Rectifier;  1000V  1.00A   General-purpose rectifier
+*SRC=1N5819;1N5819;Diodes;Schottky;  40.0V  1.00A   Schottky barrier rectifier
+*SRC=BAT54;BAT54;Diodes;Schottky;  30.0V  0.200A   Small-signal Schottky diode
+*SRC=1N4733;1N4733;Diodes;Zener;  5.10V  1.00W   Zener diode
+*SRC=1N4742;1N4742;Diodes;Zener;  12.0V  1.00W   Zener diode
+*SRC=LED_RED;LED_RED;Diodes;LED;   Red LED
+*SRC=LED_GREEN;LED_GREEN;Diodes;LED;   Green LED
+*SRC=2N3904;2N3904;BJTs NPN;Si;  40.0V  0.200A  300MHz   Small-signal NPN
+*SRC=2N3906;2N3906;BJTs PNP;Si;  40.0V  0.200A  250MHz   Small-signal PNP
+*SRC=2N2222;2N2222;BJTs NPN;Si;  30.0V  0.800A  250MHz   General-purpose NPN
+*SRC=BC547;BC547;BJTs NPN;Si;  45.0V  0.100A  300MHz   Small-signal NPN
+*SRC=BC557;BC557;BJTs PNP;Si;  45.0V  0.100A  150MHz   Small-signal PNP
+*SRC=2N7002;2N7002;MOSFETs N;Enh;  60.0V  0.115A  7.50ohms   Small-signal N-MOSFET
+*SRC=BS170;BS170;MOSFETs N;Enh;  60.0V  0.500A  5.00ohms   Small-signal N-MOSFET
+*SRC=BSS84;BSS84;MOSFETs P;Enh;  50.0V  0.130A  10.0ohms   Small-signal P-MOSFET
+*SRC=IRF540;IRF540;MOSFETs N;Enh;  100V  28.0A  0.077ohms   Power N-MOSFET
+*SRC=IRF9540;IRF9540;MOSFETs P;Enh;  100V  19.0A  0.200ohms   Power P-MOSFET
+
 * ---- diodes
 .model 1N4148 D(IS=2.52n RS=0.568 N=1.752 CJO=4p M=0.4 TT=20n BV=100 IBV=100u)
 .model 1N914 D(IS=2.52n RS=0.568 N=1.752 CJO=4p M=0.4 TT=20n BV=100 IBV=100u)

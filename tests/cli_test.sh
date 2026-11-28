@@ -404,6 +404,25 @@ check "embed: unknown option" "$bin" --embed "$work/fet.edn" --updat "unknown op
 # spicy's own models are saved too
 cp "$work/rc_lowpass.edn" "$work/rc_shared.edn"
 check "built-in model embedded" "$bin" --embed "$work/rc_shared.edn" "(from spicy built-in)"
+# the model catalog: kinds and ratings from a vendor's *SRC line, the file's name, the model
+check "models: built-in kind" "$bin" --list models Zener '{:name "1N4733" :kind "Zener" :symbol "zener" :V 5.1 :P 1'
+cat >"$work/Vendor_Schottky.lib" <<'EOF'
+*SRC=B5819W;DI_B5819W;Diodes;Si;  40.0V  1.00A  10.0ns   Vendor Schottky rectifier
+.MODEL DI_B5819W D(IS=31u RS=0.05 BV=40)
+.MODEL PLAIN1 D(IS=1n BV=30)
+EOF
+"$bin" --import-model "$work/Vendor_Schottky.lib" >/dev/null 2>&1
+check "models: vendor ratings" "$bin" --list models Schottky '{:name "DI_B5819W" :kind "Schottky" :symbol "schottky" :V 40 :I 1 :T 1e-08 :description "Vendor Schottky rectifier"'
+check "models: kind from file name" "$bin" --list models Schottky '{:name "PLAIN1" :kind "Schottky" :symbol "schottky" :V 30'
+check "models: unknown kind" "$bin" --list models Diod "kinds are Rectifier"
+# what the file does not state, given by the user (kept beside the libraries)
+check "model-info: set"      "$bin" --model-info plain1 I=2A "desc=My Schottky" ':I 2 :description "My Schottky" :file "Vendor_Schottky.lib" :yours ["I" "desc"]'
+check "model-info: listed"   "$bin" --list models Schottky ':name "PLAIN1" :kind "Schottky" :symbol "schottky" :V 30 :I 2'
+if grep -rq "My Schottky" "$models_dir"; then fail "model-info: model file unchanged"; else pass "model-info: model file unchanged"; fi
+check "model-info: same as file" "$bin" --model-info DI_B5819W "V=40 V" ':V 40 :I 1 :T 1e-08 :description "Vendor Schottky rectifier" :file "Vendor_Schottky.lib"}'
+check "model-info: another device" "$bin" --model-info plain1 kind=NPN "can be Rectifier, Switching, Schottky"
+check "model-info: no such rating" "$bin" --model-info plain1 R=1 "has no R rating"
+check "model-info: forget"   "$bin" --model-info plain1 --forget '{:name "PLAIN1" :kind "Schottky" :symbol "schottky" :V 30 :file "Vendor_Schottky.lib"}'
 sed 's/"MYD"/"MYDX"/' "$work/fet.edn" >"$work/typo.edn"
 check "missing model"        "$bin" --netlist "$work/typo.edn" "D1: model MYDX not found"
 printf '%s\n' '{:spicy-schematic 1 :components [{:symbol "res" :ref "R1" :value "1k" :at [0 0]}]' \

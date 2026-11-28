@@ -1144,7 +1144,7 @@ interact_place :: proc(d: ^Doc, v: View, msnap: P, mp: [2]f32, over: bool) {
 			if d.place_kind == .Ground {
 				append(&s.flags, Flag{name = strings.clone("0"), pos = pos, rot = d.place_rot})
 			} else {
-				c := Comp{sym = strings.clone(sym.name), ref = strings.clone(next_ref(s, sym.prefix)), value = strings.clone(sym.value), pos = pos, rot = d.place_rot, mirror = d.place_mirror, attrs = make([dynamic]Attr)}
+				c := Comp{sym = strings.clone(sym.name), ref = strings.clone(next_ref(s, sym.prefix)), value = strings.clone(d.place_value if len(d.place_value) > 0 else sym.value), pos = pos, rot = d.place_rot, mirror = d.place_mirror, attrs = make([dynamic]Attr)}
 				append(&s.comps, c)
 				if S.cut_through do cut_wires_at_part(s, len(s.comps) - 1)
 			}

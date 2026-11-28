@@ -86,7 +86,7 @@ dialog_open :: proc(k: Dialog_Kind) {
 		for s, i in S.simulators do if i < len(dl.f) && len(s.command) > 0 do set_str(&dl.f[i], s.command[0])
 	case .Appearance:
 		appearance_open()
-	case .None, .Part_Edit, .Text_Edit, .Text_View, .Shortcuts, .Confirm_Close, .Message, .About, .Diagnostics, .Trace_Edit, .Import_Repair:
+	case .None, .Part_Edit, .Text_Edit, .Text_View, .Shortcuts, .Confirm_Close, .Message, .About, .Diagnostics, .Trace_Edit, .Import_Repair, .Model_Table:
 	}
 }
 
@@ -354,7 +354,6 @@ sim_cmd_apply :: proc(d: ^Doc) {
 // ---------------------------------------------------------------------------
 // Drawing
 
-@(private = "file")
 dialog_frame :: proc(w, h: f32) -> (body: Rect) {
 	sw, sh := screen_w(), screen_h()
 	ww := min(w * ui_scale, sw - 40)
@@ -392,7 +391,6 @@ title :: proc(b: ^Rect, t: string) {
 }
 
 // OK / Cancel row at the bottom. Returns 1 for OK, -1 for cancel.
-@(private = "file")
 buttons :: proc(b: ^Rect, ok_label := "OK", cancel := true, ok_enabled := true) -> int {
 	r := cut_bottom(b, fs() + 16)
 	bw := max(text_w(ok_label) + 40, 96 * ui_scale)
@@ -444,6 +442,7 @@ draw_dialog :: proc() {
 	case .Trace_Edit: draw_trace_dialog(d)
 	case .Appearance: draw_appearance()
 	case .Import_Repair: draw_import_repair(d)
+	case .Model_Table: draw_model_table(d)
 	}
 	dl.first_frame = false
 	ui.modal = dl.kind != .None
@@ -687,11 +686,13 @@ draw_part_edit :: proc(d: ^Doc) {
 		cut_right(&vr, 6)
 	}
 	if len(models) > 0 {
-		mr := cut_right(&vr, 200 * ui_scale)
+		// the models it can use, in a table with their ratings
+		t := "Choose model…"
+		if button("dlg.model", cut_right(&vr, text_w(t) + 24), t, tip = fmt.tprintf("Pick one of the %d models this part can use, by kind and ratings", len(models))) {
+			model_table_open_part(sym, dl.ref, dl.value)
+			return
+		}
 		cut_right(&vr, 6)
-		sel := -1
-		for m, i in models do if strings.equal_fold(m, dl.value) do sel = i
-		if combo("dlg.model", mr, models, &sel) do set_str(&dl.value, models[sel])
 	}
 	if is_src {
 		// the value follows the source editor

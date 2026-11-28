@@ -433,23 +433,24 @@ comp_subckt :: proc(c: ^Comp, sym: ^Symbol, local: []Lib_Entry) -> ^Lib_Entry {
 	return e
 }
 
+// Whether a part with this symbol can use the model or subcircuit: a .model card of a type
+// the symbol takes, a subcircuit of its device (or with as many ports as it has pins).
+entry_fits_symbol :: proc(e: ^Lib_Entry, sym: ^Symbol) -> bool {
+	if !e.subckt {
+		for k in sym.models do if e.model_type == k do return true
+		return false
+	}
+	for k in sym.models do if e.dev == k || (k == "VDMOS" && (e.dev == "NMOS" || e.dev == "PMOS") && sym_dev_matches(sym, e.dev)) do return true
+	return len(sym.models) == 0 && len(e.ports) == len(sym.pins)
+}
+
 // Model names a part can use (part editor): library and schematic models of the symbol's
 // types, and subcircuits of the same device or with as many ports as the symbol has pins.
 models_for_symbol :: proc(sym: ^Symbol, local: []Lib_Entry) -> []string {
 	out := make([dynamic]string, context.temp_allocator)
 	seen := make(map[string]bool, 16, context.temp_allocator)
 	add :: proc(out: ^[dynamic]string, seen: ^map[string]bool, e: ^Lib_Entry, sym: ^Symbol) {
-		if seen[e.name] do return
-		if e.subckt {
-			fits := false
-			for k in sym.models do if e.dev == k || (k == "VDMOS" && (e.dev == "NMOS" || e.dev == "PMOS") && sym_dev_matches(sym, e.dev)) do fits = true
-			if len(sym.models) == 0 && len(e.ports) == len(sym.pins) do fits = true
-			if !fits do return
-		} else {
-			fits := false
-			for k in sym.models do if e.model_type == k do fits = true
-			if !fits do return
-		}
+		if seen[e.name] || !entry_fits_symbol(e, sym) do return
 		seen[e.name] = true
 		append(out, entry_display_name(e))
 	}

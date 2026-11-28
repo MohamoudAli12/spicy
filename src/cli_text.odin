@@ -80,6 +80,38 @@ cli_embed :: proc(args: []string) {
 	}
 }
 
+// --model-info <model> [field=value …] [--forget]: a model of the catalog; the fields given
+// are kept as the user's (model-info.edn), --forget drops them all.
+cli_model_info :: proc(args: []string) {
+	USE :: "usage: spicy --model-info <model> [kind=Zener] [V=5.1] [I=1] [P=1W] [R=…] [T=…] [F=…] [desc=…] [--forget]"
+	if len(args) < 2 do cli_usage(USE)
+	fields := make(map[string]string, 8, context.temp_allocator)
+	forget := false
+	for a in args[2:] {
+		if a == "--forget" {
+			forget = true
+			continue
+		}
+		eq := strings.index_byte(a, '=')
+		if eq <= 0 do cli_usage(tcat(USE, "   (not field=value: ", a, ")"))
+		fields[a[:eq]] = a[eq + 1:]
+	}
+	if forget && len(fields) > 0 do cli_usage(tcat(USE, "   (--forget or fields, not both)"))
+	row_of :: proc(name: string) -> ^Catalog_Row {
+		for &r in catalog_rows() do if r.key == lower(name) do return &r
+		return nil
+	}
+	if row_of(args[1]) == nil do cli_fail(EXIT_PROBLEMS, "not-found", tcat("no model ", args[1], " in the libraries (spicy --list models)"))
+	if forget {
+		if e := model_info_put(args[1], {}); len(e) > 0 do cli_fail(EXIT_FILE, "write", e)
+	} else if len(fields) > 0 {
+		if e := model_info_set(args[1], fields); len(e) > 0 do cli_fail(EXIT_PROBLEMS, "model-info", e)
+	}
+	em_begin()
+	em_catalog_row(row_of(args[1]))
+	em_print()
+}
+
 // --import-asc <in.asc> <out.edn>
 cli_import_asc :: proc(args: []string) {
 	if len(args) < 3 do cli_usage("usage: spicy --import-asc in.asc out.edn")

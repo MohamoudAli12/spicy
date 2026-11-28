@@ -20,6 +20,7 @@ Lib_Entry :: struct {
 	ports: []string, // as on the .subckt line
 	pins:  []string, // terminal names (from a "TERMINALS: D G S" comment, else the ports)
 	dev:   string, // main device: NMOS PMOS NPN PNP NJF PJF D, or ""
+	src:   string, // the vendor's "*SRC=" line naming it, after the "=" ("" for none): kind and ratings
 }
 
 // Where a library entry comes from.
@@ -33,7 +34,7 @@ Lib_Origin :: enum u8 {
 // An entry's strings, allocated with the allocator that parsed it (parse_lib_into). The pins
 // may be the ports themselves (pins_are_ports).
 lib_entry_free :: proc(e: ^Lib_Entry) {
-	delete(e.name); delete(e.model_type); delete(e.text); delete(e.file); delete(e.dev)
+	delete(e.name); delete(e.model_type); delete(e.text); delete(e.file); delete(e.dev); delete(e.src)
 	if !pins_are_ports(e) {
 		for p in e.pins do delete(p)
 		delete(e.pins)
@@ -68,6 +69,7 @@ user_models_dir :: proc() -> string {return path_join(data_dir(), "models")}
 // The first entry of a name wins (lib_find): the libraries in settings.edn, then the imported
 // ones, then spicy's built-in models, so a manufacturer's BSS84 replaces the generic one.
 models_load :: proc() {
+	models_gen += 1
 	for &e in model_lib do lib_entry_free(&e)
 	clear(&model_lib)
 	for p in S.model_libraries {
@@ -106,6 +108,20 @@ parse_lib_into :: proc(list: ^[dynamic]Lib_Entry, text: string, origin: Lib_Orig
 		types := make(map[string]string, 64, context.temp_allocator)
 		for &e in list[first:] do if !e.subckt do types[e.name] = e.model_type
 		for &e in list[first:] do if e.subckt && len(e.dev) == 0 do subckt_finish(&e, types)
+		// the vendor's "*SRC=<part>;<model>;<kind>;…" lines (Intusoft's convention, Diodes Inc.):
+		// the model's kind and ratings, for the model table
+		srcs := make(map[string]string, 64, context.temp_allocator)
+		for raw in lines {
+			l := strings.trim_space(raw)
+			if len(l) < 5 || !strings.equal_fold(l[:5], "*src=") do continue
+			f := strings.split(l[5:], ";", context.temp_allocator)
+			if len(f) < 3 do continue
+			// by the model's name; by the part's too, when no line names a model so
+			srcs[lower(strings.trim_space(f[1]))] = l[5:]
+			part := lower(strings.trim_space(f[0]))
+			if part not_in srcs do srcs[part] = l[5:]
+		}
+		if len(srcs) > 0 do for &e in list[first:] do if s, ok := srcs[e.name]; ok do e.src = strings.clone(s)
 	}
 	i := 0
 	for i < len(lines) {

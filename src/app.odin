@@ -31,6 +31,7 @@ Doc :: struct {
 	tool:        Tool,
 	place_kind:  Place_Kind,
 	place_sym:   string,
+	place_value: string, // the value parts being placed get ("": the symbol's own)
 	place_rot:   u8,
 	place_mirror: bool,
 	place_text:  string, // label name or text
@@ -65,7 +66,7 @@ Drag :: struct {
 
 Dialog_Kind :: enum u8 {
 	None, Open, Save_As, Export_Netlist, Export_CSV, Part_Picker, Part_Edit, Label_Name, Text_Edit,
-	Sim_Command, Simulator_Pick, Text_View, Shortcuts, Confirm_Close, Message, About, Trace_Edit, Import_Model, Pick_Program, Appearance, Diagnostics, Import_Repair,
+	Sim_Command, Simulator_Pick, Text_View, Shortcuts, Confirm_Close, Message, About, Trace_Edit, Import_Model, Pick_Program, Appearance, Diagnostics, Import_Repair, Model_Table,
 }
 
 App :: struct {
@@ -131,7 +132,7 @@ doc_free :: proc(d: ^Doc) {
 	for s in d.undo do delete(s)
 	for s in d.redo do delete(s)
 	delete(d.undo); delete(d.redo)
-	delete(d.path); delete(d.place_sym); delete(d.place_text); delete(d.drag.base); delete(d.sim_override)
+	delete(d.path); delete(d.place_sym); delete(d.place_value); delete(d.place_text); delete(d.drag.base); delete(d.sim_override)
 	wave_free(&d.wave)
 	free(d)
 }
@@ -536,6 +537,13 @@ run_action :: proc(name: string) {
 	}
 }
 
+// Places parts of a symbol with a model (picked in the model table).
+place_model :: proc(d: ^Doc, sym: ^Symbol, value: string) {
+	place_symbol(d, sym)
+	set_str(&d.place_value, value)
+	log.infof("placing %s with the model %s", sym.name, value)
+}
+
 place_symbol :: proc(d: ^Doc, sym: ^Symbol) {
 	switch sym.kind {
 	case .Label:
@@ -549,6 +557,7 @@ place_symbol :: proc(d: ^Doc, sym: ^Symbol) {
 		d.place_kind = .Part
 	}
 	set_str(&d.place_sym, sym.name)
+	set_str(&d.place_value, "")
 	d.place_rot = 0
 	d.place_mirror = false
 }
@@ -1243,6 +1252,19 @@ gui_main :: proc(files: []string) {
 					import_model(doc(), a[7:])
 				case strings.has_prefix(a, "edit:"): // open the editor of a part by name
 					for c, i in doc().sch.comps do if c.ref == a[5:] do dialog_part(doc(), i)
+				case strings.has_prefix(a, "choose:"): // the model table of a part, as its editor's Choose model… opens it
+					for c, i in doc().sch.comps do if c.ref == a[7:] {
+						dialog_part(doc(), i)
+						if sym := symbol_find(c.sym); sym != nil do model_table_open_part(sym, c.ref, c.value)
+					}
+				case strings.has_prefix(a, "scroll:"): // scroll:parts.grid:600: a list scrolled down by so many pixels
+					if k := strings.last_index_byte(a, ':'); k > 7 {
+						px, _ := parse_eng(a[k + 1:])
+						ui.scroll[id_of(a[7:k])] = f32(px)
+					}
+				case strings.has_prefix(a, "models:"): // models:Diodes/Zener: a kind's tile in the parts picker clicked
+					fk := strings.split_n(a[7:], "/", 2, context.temp_allocator)
+					if len(fk) == 2 do model_table_open_place(fk[0], fk[1], "")
 				case strings.has_prefix(a, "dblclick:"), strings.has_prefix(a, "rclick:"): // a double- or right-click at x,y (fractions of the window) after the run
 					test_click_right = strings.has_prefix(a, "rclick:")
 					xy := strings.split(a[strings.index_byte(a, ':') + 1:], ",", context.temp_allocator)

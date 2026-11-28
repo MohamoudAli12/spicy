@@ -460,3 +460,48 @@ embedded_vs_library :: proc(t: ^testing.T) {
 	// left: dother (another model, not used by TSW) and dsame (not in the library)
 	testing.expectf(t, len(s.embedded) == 2 && s.embedded[0].name == "dother" && s.embedded[1].name == "dsame", "left = %v", s.embedded)
 }
+
+// The model catalog: ratings and kinds from a vendor's "*SRC=" line, the file's name or the
+// model's own values; the models a subcircuit uses are part of it, not rows of their own.
+@(test)
+model_catalog :: proc(t: ^testing.T) {
+	setup()
+	// datasheet units: M is mega here, a is ampere (not SPICE's milli and atto)
+	r, x, ok := C.rating_token("250MHz")
+	testing.expectf(t, ok && r == .F && near(x, 250e6, 1e-12), "250MHz: %v %v %v", r, x, ok)
+	r, x, ok = C.rating_token("0.115A")
+	testing.expectf(t, ok && r == .I && near(x, 0.115, 1e-12), "0.115A: %v %v %v", r, x, ok)
+	r, x, ok = C.rating_token("3.20ohms")
+	testing.expectf(t, ok && r == .R && near(x, 3.2, 1e-12), "3.20ohms: %v %v %v", r, x, ok)
+	_, _, ok = C.rating_token("<=10V")
+	testing.expect(t, !ok, "<=10V is a category, not a rating")
+	for c in ([?]struct{s: string, r: C.Rating, v: f64}{{"200 mA", .I, 0.2}, {"1.5A", .I, 1.5}, {"77mΩ", .R, 0.077}, {"4 ns", .T, 4e-9}, {"1 kV", .V, 1000}, {"250M", .F, 250e6}}) {
+		v, vok := C.rating_parse(c.s, c.r)
+		testing.expectf(t, vok && near(v, c.v, 1e-12), "rating_parse(%q) = %v %v, want %v", c.s, v, vok, c.v)
+	}
+	lib := `*SRC=AZ23C10;DI_AZ23C10;Diodes;Zener <=10V; 10.0V  0.300W   Diodes Inc. Per node.
+.MODEL DI_AZ23C10 D(IS=1n BV=9.9)
+*SRC=1N4001G;DI_1N4001G;Diodes;Si;  50.0V  1.00A  2.00us   Diodes Inc. Glass Passivated Rectifier
+.MODEL DI_1N4001G D(IS=65p BV=50)
+.MODEL BZXPLAIN D(IS=1n BV=5.1)
+.SUBCKT ZWRAP A K
+D1 A K DINNER
+.ENDS
+.MODEL DINNER D(IS=1n BV=7)
+`
+	C.parse_lib_into(&C.model_lib, lib, .Library, "/x/Diodes_Zeners.lib")
+	C.models_gen += 1
+	row :: proc(name: string) -> ^C.Catalog_Row {
+		for &r in C.catalog_rows() do if r.key == name do return &r
+		return nil
+	}
+	az := row("di_az23c10")
+	testing.expectf(t, az != nil && az.kind == "Zener" && near(az.rating[.V], 10, 1e-12) && near(az.rating[.P], 0.3, 1e-12) && az.desc == "Diodes Inc. Per node.", "AZ23C10: %v", az)
+	rect := row("di_1n4001g")
+	testing.expectf(t, rect != nil && rect.kind == "Rectifier" && near(rect.rating[.T], 2e-6, 1e-12) && rect.symbol == "diode", "1N4001G: %v", rect)
+	// no vendor line: the file's name gives the kind, BV the voltage
+	plain := row("bzxplain")
+	testing.expectf(t, plain != nil && plain.kind == "Zener" && near(plain.rating[.V], 5.1, 1e-12) && plain.symbol == "zener", "BZXPLAIN: %v", plain)
+	testing.expect(t, row("zwrap") != nil, "the subcircuit is a row")
+	testing.expect(t, row("dinner") == nil, "a model only a subcircuit uses is not a row")
+}

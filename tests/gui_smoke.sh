@@ -44,6 +44,16 @@ else
 fi
 run picker "place/component"
 shots="$shots picker"
+# the model table: from a kind's tile (a double-click on a row places a part with that model),
+# and from a part's editor
+run models "models:Diodes/Zener;dblclick:0.3,0.254"
+run choose "choose:D1"
+shots="$shots models choose"
+if ! grep -q "placing zener with the model 1N4733" "$work/cfg/state/spicy.log"; then
+	echo "FAIL: a double-click on the model table's first Zener did not place a 1N4733"
+	grep -i "placing\|error" "$work/cfg/state/spicy.log" | tail -5
+	exit 1
+fi
 # menu items picked as a click picks them: an action, a submenu item (saved in settings.edn)
 run menus "menu:View/Move the waveforms;menu:View/UI scale/150 %"
 shots="$shots menus"
