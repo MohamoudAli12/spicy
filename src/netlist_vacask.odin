@@ -27,6 +27,7 @@ Vacask_Build :: struct {
 	user_opts:   [dynamic][2]string, // from .options
 	spice_elems: [dynamic]string, // SPICE element lines in the directives
 	elem_lines:  [dynamic]string, // the same, translated
+	tran_stop:   f64, // the stop time of the longest .tran
 	out:         Vacask_Out, // the translated subcircuits
 }
 
@@ -50,6 +51,7 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 	vacask_parts(nl, s, sim, &vb)
 	vacask_directives(nl, s, sim, &vb)
 	vacask_models(nl, s, &vb)
+	vacask_sine_cycles(nl, s, &vb)
 	return vacask_text(&vb, sim, title)
 }
 
@@ -296,6 +298,7 @@ vacask_tran :: proc(nl: ^Netlist, f: []string, n: int, vb: ^Vacask_Build) -> str
 		append(&nl.errors, ".tran needs a stop time")
 		return ""
 	}
+	if stop, ok := parse_eng(pos[1]); ok do vb.tran_stop = max(vb.tran_stop, stop)
 	a := fmt.tprintf("analysis tran%d tran step=%s stop=%s", n, vacask_value(pos[0]), vacask_value(pos[1]))
 	if len(pos) > 2 do a = tcat(a, " start=", vacask_value(pos[2]))
 	if len(pos) > 3 do a = tcat(a, " maxstep=", vacask_value(pos[3]))
@@ -306,6 +309,34 @@ vacask_tran :: proc(nl: ^Netlist, f: []string, n: int, vb: ^Vacask_Build) -> str
 	if uic do append(&ics, ..vb.cap_ic[:])
 	if len(ics) > 0 do a = tcat(a, " ic={", strings.join(ics[:], ", ", context.temp_allocator), "}")
 	return a
+}
+
+// LTspice's SINE(Voff Vamp Freq Td Theta Phi Ncycles) stops after Ncycles; VACASK's sine
+// goes on. The same while the transient analysis ends by then; else a warning says so.
+@(private = "file")
+vacask_sine_cycles :: proc(nl: ^Netlist, s: ^Schematic, vb: ^Vacask_Build) {
+	check :: proc(nl: ^Netlist, vb: ^Vacask_Build, ref, value: string) {
+		for tk in source_tokens(value) {
+			lt := lower(tk)
+			if !strings.has_prefix(lt, "sine(") do continue
+			o, c := strings.index_byte(tk, '('), strings.last_index_byte(tk, ')')
+			a := strings.fields(tk[o + 1:c if c > o else len(tk)], context.temp_allocator)
+			if len(a) < 7 do continue
+			n, nok := parse_eng(a[6])
+			freq, fok := parse_eng(a[2])
+			td, _ := parse_eng(a[3])
+			if !nok || !fok || n <= 0 || freq <= 0 do continue
+			ends := td + n / freq
+			if vb.tran_stop > ends * (1 + 1e-9) {
+				append(&nl.warnings, fmt.tprintf("%s: VACASK's sine does not stop after Ncycles=%s (at %s s): from there on the run differs from LTspice's (the .tran goes on to %s s)", ref, a[6], fmt.tprintf("%.6g", ends), fmt.tprintf("%.6g", vb.tran_stop)))
+			}
+		}
+	}
+	for &c in s.comps do check(nl, vb, c.ref, c.value)
+	for l in vb.spice_elems {
+		f := strings.fields(l, context.temp_allocator)
+		if len(f) > 0 do check(nl, vb, f[0], l)
+	}
 }
 
 // The models (from the directives, the libraries and the defaults) and subcircuits, and the
@@ -560,7 +591,9 @@ vacask_source :: proc(v: string) -> (string, string) {
 			names := [?]string{"val0", "val1", "delay", "rise", "fall", "width", "period"}
 			strings.write_string(&b, " type=\"pulse\"")
 			for x, k in a do if k < len(names) do fmt.sbprintf(&b, " %s=%s", names[k], vacask_value(x))
-		case strings.has_prefix(lt, "sin("):
+		case strings.has_prefix(lt, "sin("), strings.has_prefix(lt, "sine("):
+			// LTspice's SINE(…) is SIN(…) with a 7th argument, the number of cycles, which
+			// VACASK has not (vacask_sine_cycles says where that matters)
 			a := args(tk)
 			names := [?]string{"sinedc", "ampl", "freq", "delay", "theta", "tdphase"}
 			strings.write_string(&b, " type=\"sine\"")

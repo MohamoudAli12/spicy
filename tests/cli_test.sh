@@ -47,6 +47,13 @@ check "xyce switch steps"    "$bin" --netlist "$work/switch.edn" --sim xyce ".op
 check "transformer netlist" "$bin" --netlist "$work/transformer.edn" "KT1 LT1_P LT1_S 0.999"
 check "vacask transformer"  "$bin" --netlist "$work/transformer.edn" --sim vacask "kt1 () mutual k=0.999 ind1=\"lt1_p\" ind2=\"lt1_s\""
 check "vacask switch"        "$bin" --netlist "$work/switch.edn" --sim vacask "embed \"spicy_vsw.va\""
+# LTspice's SINE(… Ncycles): VACASK's sine, the same while the .tran ends when its cycles do
+# (1 cycle of 100 kHz is 10 us; the .tran runs 20 us)
+sed 's/:value "PULSE(0 1 0 1n 1n 5u 10u) AC 1"/:value "SINE(0 1 100k 0 0 0 1)"/' "$work/rc_lowpass.edn" >"$work/sine.edn"
+check "vacask SINE"          "$bin" --netlist "$work/sine.edn" --sim vacask 'type="sine" sinedc=0 ampl=1 freq=100000 delay=0 theta=0 tdphase=0'
+check "vacask SINE cycles"   "$bin" --netlist "$work/sine.edn" --sim vacask "does not stop after Ncycles=1 (at 1e-05 s)"
+sed 's/100k 0 0 0 1)/100k 0 0 0 2)/' "$work/sine.edn" >"$work/sine2.edn"
+if "$bin" --netlist "$work/sine2.edn" --sim vacask 2>&1 | grep -q "does not stop"; then fail "vacask SINE cycles to the end"; else pass "vacask SINE cycles to the end"; fi
 
 # LTspice import
 cat >"$work/imp.asc" <<'EOF'
