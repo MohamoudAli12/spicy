@@ -1415,6 +1415,8 @@ test_action :: proc(a: string) {
 		test_menu_pick(a[5:])
 	case strings.has_prefix(a, "in-waves:"): // run inside the waveform window
 		for p in popouts do if p.kind == .Waves do p.test_action = strings.clone(a[9:])
+	case strings.has_prefix(a, "in-parts:"): // run inside the parts window (in-parts:models:Diodes/Zener)
+		for p in popouts do if p.kind == .Parts do p.test_action = strings.clone(a[9:])
 	case: run_action(a)
 	}
 }

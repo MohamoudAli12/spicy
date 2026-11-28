@@ -304,6 +304,9 @@ popout_open :: proc(d: ^Doc) -> bool {
 	return true
 }
 
+// To the main window (a part picked in the parts window is placed there).
+focus_main_window :: proc() {glfwFocusWindow(main_win)}
+
 // Opens the parts window (or raises it). False when it cannot be made.
 parts_window_open :: proc() -> bool {
 	p := popout_create(.Parts, PARTS_WINDOW, "parts-window", 560, 720, 300, 300)
@@ -408,7 +411,7 @@ popout_close :: proc(p: ^Popout) {
 		glfwDestroyWindow(p.win)
 		delete(p.inp.chars)
 		ordered_remove(&popouts, i)
-		if p.kind == .Waves && app.dlg_win == p.doc_id do app.dlg_win = 0 // its dialog moves to the main window
+		if app.dlg_win == p.doc_id do app.dlg_win = 0 // its dialog moves to the main window
 		free(p)
 		return
 	}
@@ -515,20 +518,22 @@ popout_draw :: proc(p: ^Popout) {
 	ui_begin_frame()
 	if p.kind == .Parts {
 		// the parts window: Esc closes it (when not typing in the search box)
-		if key_pressed(.ESCAPE) && ui.popup_id == 0 && !typing() do p.close = true
+		// (a dialog shown in it takes the Esc)
+		if key_pressed(.ESCAPE) && ui.popup_id == 0 && !typing() && !(app.dlg.kind != .None && app.dlg_win == p.doc_id) do p.close = true
 	} else if p.fullscreen && key_pressed(.ESCAPE) && !ui.modal && ui.popup_id == 0 && !typing() {
 		popout_set_fullscreen(p, false)
 	} else do handle_keys()
 	if len(p.test_action) > 0 {
 		a := p.test_action
 		p.test_action = ""
-		run_action(a)
+		test_action(a) // (an action, or a test hook as models:)
 		delete(a)
 	}
 	if p.kind == .Parts {
 		if picked := parts_panel({0, 0, f32(fw), f32(fh)}, d); picked {
 			glfwFocusWindow(main_win) // place it on the schematic
 		}
+		draw_dialog() // the model table of a group of models clicked here
 		draw_popup()
 		draw_tooltip()
 	} else if doc_index(p.doc_id) >= 0 {

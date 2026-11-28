@@ -48,8 +48,11 @@ dialog_open :: proc(k: Dialog_Kind) {
 	dl := &app.dlg
 	dl.kind = k
 	dl.first_frame = true
-	// a dialog asked for in a waveform window shows there; from the parts window, in the main one
-	app.dlg_win = cur_popout.doc_id if cur_popout != nil && cur_popout.kind == .Waves else 0
+	// a dialog asked for in a waveform window shows there; from the parts window, in the main
+	// one, but for the model table (a group of models clicked there) and its datasheet picker:
+	// the main window may be behind the parts window, or on another screen
+	app.dlg_win = 0
+	if p := cur_popout; p != nil && (p.kind == .Waves || k == .Model_Table || k == .Pick_Datasheet) do app.dlg_win = p.doc_id
 	dl.pick = 0
 	switch k {
 	case .Open, .Save_As, .Export_Netlist, .Export_CSV, .Import_Model, .Pick_Program, .Pick_Datasheet:

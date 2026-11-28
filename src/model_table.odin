@@ -1,6 +1,7 @@
 package spicy
 
 import "core:fmt"
+import "core:log"
 import "core:math"
 import "core:mem"
 import "core:mem/virtual"
@@ -274,6 +275,7 @@ rating_heading :: proc(r: Rating) -> string {
 
 draw_model_table :: proc(d: ^Doc) {
 	dl := &app.dlg
+	if dl.first_frame do log.infof("the model table (%s) in the %s window", mt.title, "parts" if cur_popout != nil && cur_popout.kind == .Parts else "main")
 	if mt.gen != catalog_gen() {
 		// the catalog changed (a model given a kind or ratings, a model imported): copy again
 		sel := mt.sel
@@ -332,6 +334,16 @@ draw_model_table :: proc(d: ^Doc) {
 	}
 	fixed: f32 = 0
 	for c in cols do fixed += width(c) * ui_scale
+	// narrow (the parts window): without the file, then the kind (the list above picks it), then
+	// the description
+	for drop in ([]Col{.File, .Kind, .Desc}) {
+		if fixed + 120 * ui_scale <= b.w - 12 do break
+		for c, i in cols do if c == drop {
+			ordered_remove(&cols, i)
+			fixed -= width(c) * ui_scale
+			break
+		}
+	}
 	desc_w := max(120 * ui_scale, b.w - 12 - fixed)
 	heading :: proc(c: Col) -> string {
 		switch c {
@@ -443,6 +455,7 @@ draw_model_table :: proc(d: ^Doc) {
 			sym := symbol_find(sel_row.symbol)
 			dialog_close()
 			if sym != nil && d != nil do place_model(d, sym, sel_row.name)
+			if cur_popout != nil do focus_main_window() // picked in the parts window: placed on the schematic
 		} else {
 			set_str(&dl.value, sel_row.name)
 			mt_close()
@@ -505,16 +518,29 @@ mt_editor :: proc(r: Rect, row: ^Catalog_Row) -> (enter: bool) {
 	lab :: proc(r: ^Rect, t: string) {
 		text_in(cut_left(r, text_w(t, fs(0.9)) + 10), t, th.muted, 0, fs(0.9), 2)
 	}
+	// the fields as wide as the line has room for (narrow in the parts window)
+	labels: f32 = text_w("Kind", fs(0.9)) + 10
+	nq := 0
+	for q in Rating do if q in device_ratings(row.file_kind) {
+		labels += 10 + text_w(rating_heading(q), fs(0.9)) + 10
+		nq += 1
+	}
+	room := l1.w - labels
+	kw, fw := 120 * ui_scale, 78 * ui_scale
+	if kw + f32(nq) * fw > room {
+		k := max(room, 0) / (kw + f32(nq) * fw)
+		kw, fw = kw * k, fw * k
+	}
 	lab(&l1, "Kind")
-	kr := cut_left(&l1, 120 * ui_scale)
+	kr := cut_left(&l1, kw)
 	if len(mt.ed_kinds) > 1 do combo("mt.ed.kind", kr, mt.ed_kinds, &mt.ed_kind)
-	else do text_in(kr, row.kind, th.fg, 0, fs(0.9), 4)
+	else do text_in(kr, fit_text(row.kind, kr.w - 8, fs(0.9)), th.fg, 0, fs(0.9), 4)
 	for q in Rating {
 		if q not_in device_ratings(row.file_kind) do continue
 		cut_left(&l1, 10)
 		h := rating_heading(q)
 		lab(&l1, h)
-		text_field(tcat("mt.ed.", RATING_KEY[q]), cut_left(&l1, 78 * ui_scale), &mt.ed_val[q], RATING_UNIT[q])
+		text_field(tcat("mt.ed.", RATING_KEY[q]), cut_left(&l1, fw), &mt.ed_val[q], RATING_UNIT[q])
 	}
 	// line 2: description, Save, the file's values
 	reset_l := "Use the file's values"

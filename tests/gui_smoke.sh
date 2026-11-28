@@ -120,6 +120,17 @@ if ! grep -q "showing D1: the SPICE model 1N4148" "$work/cfg/state/spicy.log"; t
 	grep -i "showing\|error" "$work/cfg/state/spicy.log" | tail -5
 	exit 1
 fi
+# the parts in their own window: a group of models clicked there shows its model table there
+# (it was a dialog of the main window, which may be behind it), with the search to type in
+mkdir -p "$work/cfgp"
+printf '{:parts-own-window true}\n' >"$work/cfgp/prefs.edn"
+SPICY_CONFIG_DIR="$work/cfgp" run partsmodels "place/component;in-parts:models:Diodes/Zener"
+shots="$shots partsmodels partsmodels-parts"
+if ! grep -q "the model table (Diodes: pick a model to place) in the parts window" "$work/cfgp/state/spicy.log"; then
+	echo "FAIL: a group of models clicked in the parts window: its model table is not shown there"
+	grep -i "model table\|parts" "$work/cfgp/state/spicy.log" | tail -5
+	exit 1
+fi
 # menu items picked as a click picks them: an action, a submenu item (saved in settings.edn)
 run menus "menu:View/Move the waveforms;menu:View/UI scale/150 %"
 shots="$shots menus"
