@@ -64,6 +64,9 @@ step_forms :: proc(t: ^testing.T) {
 	testing.expect_value(t, out, "parameters R=2k\nr1 (a b) spicy_r r=R\ncontrol\nendc\n")
 	out = C.step_netlist("r1 (a b) spicy_r r=R\ncontrol\nendc\n", "R=2k", true)
 	testing.expect_value(t, out, "r1 (a b) spicy_r r=R\nparameters R=2k\ncontrol\nendc\n")
+	// VACASK: a parameter an analysis uses is a control block variable too: both change
+	out = C.step_netlist("parameters ts=20u\ncontrol\n  var ts=20u\n  analysis tran1 tran step=(ts)/1000 stop=ts\nendc\n", "ts=40u", true)
+	testing.expect_value(t, out, "parameters ts=40u\ncontrol\n  var ts=40u\n  analysis tran1 tran step=(ts)/1000 stop=ts\nendc\n")
 }
 
 // x = 0 1 2 3 4, y = 0 1 2 1 0

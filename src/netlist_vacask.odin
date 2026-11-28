@@ -28,6 +28,7 @@ Vacask_Build :: struct {
 	spice_elems: [dynamic]string, // SPICE element lines in the directives
 	elem_lines:  [dynamic]string, // the same, translated
 	tran_stop:   f64, // the stop time of the longest .tran
+	param_lines: [dynamic]string, // the .param assignments ("ts=20u r=1k")
 	out:         Vacask_Out, // the translated subcircuits
 }
 
@@ -48,6 +49,7 @@ netlist_vacask :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, title: 
 	vb.user_opts = make([dynamic][2]string, context.temp_allocator)
 	vb.spice_elems = make([dynamic]string, context.temp_allocator)
 	vb.elem_lines = make([dynamic]string, context.temp_allocator)
+	vb.param_lines = make([dynamic]string, context.temp_allocator)
 	vacask_parts(nl, s, sim, &vb)
 	vacask_directives(nl, s, sim, &vb)
 	vacask_models(nl, s, &vb)
@@ -245,6 +247,7 @@ vacask_directives :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, vb: 
 			r, _ := strings.replace_all(rest, "{", "", context.temp_allocator)
 			r, _ = strings.replace_all(r, "}", "", context.temp_allocator)
 			append(&vb.params, tcat("parameters ", r))
+			append(&vb.param_lines, r)
 		case ".model":
 			append(&vb.model_cards, t)
 		case ".option", ".options", ".opt", ".opts":
@@ -291,8 +294,9 @@ vacask_tran :: proc(nl: ^Netlist, f: []string, n: int, vb: ^Vacask_Build) -> str
 		else do append(&pos, x)
 	}
 	if len(pos) == 1 {
-		stop, _ := parse_eng(pos[0])
-		inject_at(&pos, 0, fmt.tprintf("%.6g", stop / 1000))
+		// the step: a thousandth of the stop time (an expression's too, ".tran {ts}")
+		if stop, ok := parse_eng(pos[0]); ok do inject_at(&pos, 0, fmt.tprintf("%.6g", stop / 1000))
+		else do inject_at(&pos, 0, tcat("{(", vacask_value(pos[0]), ")/1000}"))
 	}
 	if len(pos) < 2 {
 		append(&nl.errors, ".tran needs a stop time")
@@ -309,6 +313,33 @@ vacask_tran :: proc(nl: ^Netlist, f: []string, n: int, vb: ^Vacask_Build) -> str
 	if uic do append(&ics, ..vb.cap_ic[:])
 	if len(ics) > 0 do a = tcat(a, " ic={", strings.join(ics[:], ", ", context.temp_allocator), "}")
 	return a
+}
+
+// The names a .param line assigns: "ts=20u gain = 2*a" gives ts and gain.
+@(private = "file")
+param_names :: proc(r: string) -> []string {
+	out := make([dynamic]string, context.temp_allocator)
+	for k := 0; k < len(r); k += 1 {
+		if r[k] != '=' do continue
+		e := k
+		for e > 0 && (r[e - 1] == ' ' || r[e - 1] == '\t') do e -= 1
+		st := e
+		for st > 0 && is_ident_char(r[st - 1]) do st -= 1
+		if st < e do append(&out, r[st:e])
+	}
+	return out[:]
+}
+
+// Whether a line has name as a word of its own (not part of a longer name).
+@(private = "file")
+word_in :: proc(line, name: string) -> bool {
+	for k := 0; k + len(name) <= len(line); k += 1 {
+		if !strings.equal_fold(line[k:k + len(name)], name) do continue
+		before := k == 0 || !is_ident_char(line[k - 1])
+		after := k + len(name) == len(line) || !is_ident_char(line[k + len(name)])
+		if before && after do return true
+	}
+	return false
 }
 
 // LTspice's SINE(Voff Vamp Freq Td Theta Phi Ncycles) stops after Ncycles; VACASK's sine
@@ -422,6 +453,13 @@ vacask_text :: proc(vb: ^Vacask_Build, sim: ^Simulator_Def, title: string) -> st
 @(private = "file")
 vacask_control :: proc(b: ^strings.Builder, vb: ^Vacask_Build, ctrl_opts, ctrl_extra: []string) {
 	strings.write_string(b, "\ncontrol\n  save default\n")
+	// the analyses see circuit variables, not the circuit's parameters: a .param an analysis
+	// uses (".tran {ts}") is a variable too
+	for r in vb.param_lines {
+		used := false
+		for name in param_names(r) do for c in vb.control do if word_in(c, name) do used = true
+		if used do fmt.sbprintf(b, "  var %s\n", r)
+	}
 	opts := make([dynamic][2]string, context.temp_allocator)
 	switches := strings.contains(strings.to_string(vb.body), " spicy_vsw") || has_switch_model(vb.models[:])
 	// translated SPICE subcircuits: converge on the solution only, as SPICE does (vendor

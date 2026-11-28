@@ -65,7 +65,9 @@ step_netlist :: proc(text, assign: string, vacask: bool) -> string {
 			continue
 		}
 		key := lower(f[0])
-		is_def := key == "parameters" if vacask else (key == ".param" || key == ".params")
+		// VACASK: the parameters line, and the control block's var line of a parameter an
+		// analysis uses
+		is_def := (key == "parameters" || key == "var") if vacask else (key == ".param" || key == ".params")
 		if !is_def {
 			append(&out, l)
 			continue

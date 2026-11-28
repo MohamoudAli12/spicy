@@ -133,8 +133,11 @@ spice_fix_directive :: proc(l: string, base_dir := "") -> string {
 		if lower(cmd) == ".lib" && len(f) >= 3 do return fmt.tprintf("%s \"%s\" %s", cmd, p, strings.join(f[2:], " ", context.temp_allocator))
 		return fmt.tprintf("%s \"%s\"", cmd, p)
 	}
+	// ".tran 20u": a step of a thousandth of the stop time, which SPICE needs (also when the
+	// stop time is an expression, ".tran {ts}")
 	if len(f) == 2 && lower(f[0]) == ".tran" {
 		if stop, ok := parse_eng(f[1]); ok do return tcat(".tran ", fmt_spice(stop / 1000), " ", f[1])
+		if strings.has_prefix(f[1], "{") && strings.has_suffix(f[1], "}") do return tcat(".tran {(", f[1][1:len(f[1]) - 1], ")/1000} ", f[1])
 	}
 	return l
 }
