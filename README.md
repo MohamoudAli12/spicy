@@ -57,7 +57,7 @@ Symbols, models and default settings are built into the binary, so nothing else 
 - Export the traces to CSV.
 
 ### Import
-- **LTspice `.asc` schematics:** open them directly or convert them with `--import-asc`. A part's `Rser=`, `Lser=`, `Rpar=`, `Cpar=` become its ESR, ESL, leakage, DC resistance … (which every simulator runs), its ratings (`V=`, `Ipk=`) spicy's ratings, and `mfg=`, `pn=`, `type=` stay with the part.
+- **LTspice `.asc` schematics:** open them directly or convert them with `--import-asc`. A part's `Rser=`, `Lser=`, `Rpar=`, `Cpar=` become its ESR, ESL, leakage, DC resistance … (which every simulator runs), its ratings (`V=`, `Ipk=`) spicy's ratings, and `mfg=`, `pn=`, `type=` stay with the part. A symbol spicy has no equivalent for (an LTspice chip such as the LT8648S) is kept as a placeholder, drawn as "? name": the circuit does not run until it is replaced.
 - **SPICE netlists** (`.cir`, `.net`, `.sp`, …): each element becomes a part, wired up with net labels.
 - **PSpice and LTspice models:** ngspice runs in its PSpice or LTspice compatibility mode when a model needs it (`mfg=`, LTspice's ideal diode, `uplim()`, PSpice's `VALUE` sources …). What a simulator cannot run (an LTspice function Xyce lacks, VDMOS on Xyce) is an error before the run; an ideal diode on Xyce or VACASK, which they simulate as a plain diode, is a warning. See `reference/spicy_RG.md` §6.1.
 

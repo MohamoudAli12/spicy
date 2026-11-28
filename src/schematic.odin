@@ -136,6 +136,25 @@ comp_xf :: proc(c: ^Comp, p: [2]f32) -> [2]f32 {return xform_f(c.pos, c.rot, c.m
 comp_pin :: proc(c: ^Comp, s: ^Symbol, i: int) -> P {return xform_p(c.pos, c.rot, c.mirror, s.pins[i].at)}
 
 // Rotated bounding box of a part (schematic units).
+// A part whose symbol spicy does not have (an LTspice chip, a symbol from elsewhere): the
+// circuit cannot be simulated without it.
+unknown_symbol_error :: proc(c: ^Comp) -> string {
+	return fmt.tprintf("%s: unknown symbol \"%s\": spicy has no symbol of that name, so the circuit cannot run with it. Correct: replace the part with one of spicy's (Parts…), or make the symbol (Place › New symbol…)", c.ref, c.sym)
+}
+
+// The box of a part with no symbol: its "? name" label (as sch_view draws it), so it can be
+// selected, moved and deleted.
+unknown_comp_bounds :: proc(c: ^Comp) -> (lo, hi: [2]f32) {
+	lo = pf(c.pos)
+	return lo, lo + {f32(len(c.sym) + 2) * S.text_size * 0.6, S.text_size * 1.3}
+}
+
+// A part's box: its symbol's, or the label of a part with no symbol.
+comp_box :: proc(c: ^Comp) -> (lo, hi: [2]f32) {
+	if sym := symbol_find(c.sym); sym != nil do return comp_bounds(c, sym)
+	return unknown_comp_bounds(c)
+}
+
 comp_bounds :: proc(c: ^Comp, s: ^Symbol) -> (lo, hi: [2]f32) {
 	a := comp_xf(c, s.lo)
 	b := comp_xf(c, s.hi)
@@ -673,9 +692,7 @@ sch_bounds :: proc(s: ^Schematic) -> (lo, hi: [2]f32, ok: bool) {
 		hi.x = max(hi.x, p.x); hi.y = max(hi.y, p.y)
 	}
 	for &c in s.comps {
-		sym := symbol_find(c.sym)
-		if sym == nil do continue
-		a, b := comp_bounds(&c, sym)
+		a, b := comp_box(&c)
 		add(&lo, &hi, a); add(&lo, &hi, b)
 		ok = true
 	}
@@ -708,6 +725,6 @@ load_schematic_file :: proc(path: string) -> (s: Schematic, warnings: []string, 
 	if len(e) > 0 do return {}, nil, fmt.tprintf("%s: %s", path, e)
 	register_embedded_symbols(&sch, path)
 	unknown := make([dynamic]string, context.temp_allocator)
-	for c in sch.comps do if symbol_find(c.sym) == nil do append(&unknown, fmt.tprintf("%s: unknown symbol \"%s\"", c.ref, c.sym))
+	for &c in sch.comps do if symbol_find(c.sym) == nil do append(&unknown, unknown_symbol_error(&c))
 	return sch, unknown[:], ""
 }

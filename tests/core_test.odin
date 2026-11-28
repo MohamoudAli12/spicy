@@ -225,6 +225,35 @@ ltspice_import :: proc(t: ^testing.T) {
 	testing.expect(t, s.texts[0].directive)
 }
 
+// An LTspice symbol spicy does not have (a chip) is kept as a placeholder under its name (one
+// "\\" for LTspice's two): the netlist refuses to run it, also once saved; its "? name" label
+// can be clicked (selected, moved, deleted).
+ASC_UNKNOWN :: `Version 4
+SHEET 1 880 680
+SYMBOL res 112 80 R0
+SYMATTR InstName R1
+SYMATTR Value 10k
+SYMBOL PowerProducts\\LT8648S 256 256 R0
+SYMATTR InstName U1
+TEXT 0 300 Left 2 !.op
+`
+
+@(test)
+ltspice_import_unknown_symbol :: proc(t: ^testing.T) {
+	setup()
+	s, warnings, err := C.asc_import(transmute([]u8)string(ASC_UNKNOWN))
+	testing.expect_value(t, err, "")
+	testing.expect_value(t, len(s.comps), 2)
+	testing.expect_value(t, s.comps[1].sym, "PowerProducts\\LT8648S")
+	testing.expect_value(t, s.comps[1].ref, "U1")
+	testing.expect_value(t, len(warnings), 1)
+	d := C.Doc{sch = s}
+	v := C.View{z = 1}
+	hit := C.sch_hit(&d, v, {256 + 30, 256 + 6})
+	testing.expect_value(t, hit.kind, C.Hit_Kind.Comp)
+	testing.expect_value(t, hit.idx, 1)
+}
+
 // LTspice orientations: Rn turns clockwise; Mn turns and then mirrors x. pnp and pmos have
 // LTspice's npn / nmos pinout (collector / drain at the top). Pins land where LTspice has them,
 // and the orientation survives saving.

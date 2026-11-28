@@ -79,6 +79,15 @@ TEXT 0 300 Left 2 !.op
 EOF
 check "asc import"           "$bin" --import-asc "$work/imp.asc" "$work/imp.edn" ""
 check "asc import result"    cat "$work/imp.edn" ":symbol \"res\""
+# an LTspice symbol spicy does not have (a chip): kept as a placeholder, so the run stops (it ran
+# without the chip, with results that mean nothing), also once saved as .edn
+sed 's/^TEXT 0 300 Left 2 !.op$/SYMBOL PowerProducts\\\\LT8648S 256 256 R0\nSYMATTR InstName U1\nTEXT 0 300 Left 2 !.op/' "$work/imp.asc" >"$work/chip.asc"
+check "chip: import warning"   "$bin" --import-asc "$work/chip.asc" "$work/chip.edn" '1 × LTspice symbol "PowerProducts\LT8648S" is not in spicy'"'"'s library: kept as a placeholder'
+check "chip: kept"             cat "$work/chip.edn" ':symbol "PowerProducts\\LT8648S" :ref "U1"'
+check "chip: run stops"        "$bin" --run "$work/chip.asc" 'U1: unknown symbol \"PowerProducts\\LT8648S\": spicy has no symbol of that name, so the circuit cannot run with it'
+check "chip: saved run stops"  "$bin" --run "$work/chip.edn" "U1: unknown symbol"
+check "chip: check fails"      "$bin" --check "$work/chip.asc" ':ok false'
+if "$bin" --run "$work/chip.asc" >/dev/null 2>&1; then fail "chip: run exit status"; else pass "chip: run exit status"; fi
 # LTspice's Rser= Lser= Rpar= Cpar= of a SpiceLine: the part's ESR, ESL … (no simulator reads
 # them); its data (mfg= pn= …) kept; what spicy has no element for left out, with a warning
 cat >"$work/rser.asc" <<'EOF'
@@ -124,6 +133,9 @@ check "asc Ipk: rating"        cat "$work/rser.edn" '"imax" "12.5" "dcr" "1k"'
 sed 's/Cpar=0 mfg/Cpar=1p RLshunt=10 mfg/' "$work/rser.asc" >"$work/rser2.asc"
 check "asc Cpar: capacitor"    "$bin" --import-asc "$work/rser2.asc" "$work/rser2.edn" "C1: LTspice's Cpar=1p left out (spicy has no capacitance across a capacitor)"
 check "asc RLshunt"            "$bin" --import-asc "$work/rser2.asc" "$work/rser2.edn" "C1: LTspice's RLshunt=10 left out"
+# an import's notes are warnings for --check, not errors (LTspice's Cpar=1p left out)
+check "check: import note a warning" "$bin" --text --check "$work/rser2.asc" "warning: C1: LTspice's Cpar=1p left out"
+if "$bin" --text --check "$work/rser2.asc" 2>&1 | grep -q "^error:"; then fail "check: import note not an error"; else pass "check: import note not an error"; fi
 if "$bin" --import-asc "$work/rser.asc" "$work/rser.edn" 2>&1 | grep -q "left out"; then fail "asc Cpar=0: no warning"; else pass "asc Cpar=0: no warning"; fi
 printf '* LTspice netlist\nV1 out 0 5 Rser=1k\nR1 out 0 1k\nC1 out 0 1u Rser=10m Lser=1n\n.op\n.end\n' >"$work/rser.cir"
 check "netlist Rser: source"   "$bin" --netlist "$work/rser.cir" "RV1_rser out n_v1_1 1k"

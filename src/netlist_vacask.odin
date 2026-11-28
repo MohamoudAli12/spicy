@@ -75,7 +75,7 @@ vacask_parts :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, vb: ^Vaca
 	for &c, ci in s.comps {
 		sym := symbol_find(c.sym)
 		if sym == nil {
-			append(&nl.errors, fmt.tprintf("%s: unknown symbol \"%s\"", c.ref, c.sym))
+			append(&nl.errors, unknown_symbol_error(&c))
 			continue
 		}
 		if sym.kind != .Part do continue

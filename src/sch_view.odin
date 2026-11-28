@@ -292,9 +292,7 @@ sch_hit :: proc(d: ^Doc, v: View, m: [2]f32) -> Hit {
 	for i := len(s.flags) - 1; i >= 0; i -= 1 do if r_contains(flag_rect(v, s.flags[i]), m) do return {.Flag, i}
 	best_area, bc := f32(1e18), -1
 	for &c, i in s.comps {
-		sym := symbol_find(c.sym)
-		if sym == nil do continue
-		lo, hi := comp_bounds(&c, sym)
+		lo, hi := comp_box(&c)
 		lo -= 4
 		hi += 4
 		if p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y {
@@ -449,7 +447,8 @@ transform_selection :: proc(s: ^Schematic, mirror: bool) {
 	hi := [2]f32{-1e9, -1e9}
 	add :: proc(lo, hi: ^[2]f32, p: [2]f32) {lo^ = {min(lo.x, p.x), min(lo.y, p.y)}; hi^ = {max(hi.x, p.x), max(hi.y, p.y)}}
 	for &c in s.comps do if c.sel {
-		if sym := symbol_find(c.sym); sym != nil {a, b := comp_bounds(&c, sym); add(&lo, &hi, a); add(&lo, &hi, b)}
+		a, b := comp_box(&c)
+		add(&lo, &hi, a); add(&lo, &hi, b)
 	}
 	for w in s.wires do if w.sel {add(&lo, &hi, pf(w.a)); add(&lo, &hi, pf(w.b))}
 	for f in s.flags do if f.sel do add(&lo, &hi, pf(f.pos))
@@ -684,7 +683,7 @@ draw_schematic :: proc(d: ^Doc, r: Rect) {
 		sym := symbol_find(c.sym)
 		if sym == nil {
 			p := to_scr(v, pf(c.pos))
-			draw_text(tcat("? ", c.sym), p.x, p.y, th.err, S.text_size * v.z)
+			draw_text(tcat("? ", c.sym), p.x, p.y, th.s_select if c.sel else th.err, S.text_size * v.z)
 			continue
 		}
 		col := th.s_symbol
@@ -888,9 +887,7 @@ interact_select :: proc(d: ^Doc, v: View, r: Rect, hit: Hit, msnap: P, mp: [2]f3
 				hi := to_sch(v, {rr.x + rr.w, rr.y + rr.h})
 				inside :: proc(p, lo, hi: [2]f32) -> bool {return p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y}
 				for &c in s.comps {
-					sym := symbol_find(c.sym)
-					if sym == nil do continue
-					a2, b2 := comp_bounds(&c, sym)
+					a2, b2 := comp_box(&c)
 					if inside((a2 + b2) / 2, lo, hi) do c.sel = true
 				}
 				for &w in s.wires do if inside(pf(w.a), lo, hi) && inside(pf(w.b), lo, hi) do w.sel = true

@@ -1,6 +1,7 @@
 package spicy
 
 import "core:fmt"
+import "core:slice"
 import "core:math"
 import "core:os"
 import "core:strconv"
@@ -241,8 +242,9 @@ cli_check :: proc(path: string, args: []string) {
 	nl := netlist_build(&s, sim, "check", dir_of(abs_path(path)))
 	errors := make([dynamic]string, context.temp_allocator)
 	warnings := make([dynamic]string, context.temp_allocator)
-	for w in warn do append(&errors, w) // unknown symbols
 	for e in nl.errors do append(&errors, e)
+	// the file's own warnings (an import's); an unknown symbol is the netlist's error already
+	for w in warn do if !slice.contains(errors[:], w) do append(&warnings, w)
 	for w in nl.warnings do append(&warnings, w)
 	for w in nl.nets.warnings do append(&warnings, w)
 	if out_fmt == .Text {

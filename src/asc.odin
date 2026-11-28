@@ -6,7 +6,8 @@ import "core:strings"
 import "core:unicode/utf16"
 
 // LTspice .asc import. Parts of LTspice's standard library map to spicy symbols with the
-// same pin positions; other symbols are reported and left out.
+// same pin positions; other symbols are kept as placeholders (drawn as "? name"), which stop a
+// run until they are replaced.
 
 ASC_SYMBOLS := [?][2]string {
 	{"res", "res"}, {"res2", "res"}, {"cap", "cap"}, {"polcap", "polcap"}, {"ind", "ind"}, {"ind2", "ind"},
@@ -80,7 +81,13 @@ asc_import :: proc(data: []u8) -> (s: Schematic, warnings: [dynamic]string, err:
 			mapped := ""
 			for m in ASC_SYMBOLS do if m[0] == lt do mapped = m[1]
 			if len(mapped) == 0 || symbol_find(mapped) == nil {
-				skipped[f[1]] += 1
+				// kept under LTspice's symbol name: the circuit does not run without it (the
+				// netlist's "unknown symbol" error), also once saved, until it is replaced
+				// LTspice writes the folder's "\" twice: "PowerProducts\\LT8648S"
+				name, _ := strings.replace_all(f[1], "\\\\", "\\", context.temp_allocator)
+				skipped[name] += 1
+				append(&s.comps, Comp{sym = strings.clone(name), pos = {num(f[2]), num(f[3])}, attrs = make([dynamic]Attr)})
+				cur = len(s.comps) - 1
 				continue
 			}
 			o := f[4]
@@ -129,6 +136,10 @@ asc_import :: proc(data: []u8) -> (s: Schematic, warnings: [dynamic]string, err:
 	}
 	for &c in s.comps {
 		sym := symbol_find(c.sym)
+		if sym == nil {
+			if len(c.ref) == 0 do c.ref = strings.clone(next_ref(&s, "X"))
+			continue
+		}
 		if len(c.ref) == 0 do c.ref = strings.clone(next_ref(&s, sym.prefix))
 		// LTspice's Rser= Lser= … of the SpiceLine: the part's ESR, ESL …
 		lt_instance_params(&c, &warnings)
@@ -138,7 +149,7 @@ asc_import :: proc(data: []u8) -> (s: Schematic, warnings: [dynamic]string, err:
 	names := make([dynamic]string, context.temp_allocator)
 	for k in skipped do append(&names, k)
 	sort_strings(names[:])
-	for k in names do append(&warnings, fmt.tprintf("left out %d × symbol \"%s\" (not in spicy's library)", skipped[k], k))
+	for k in names do append(&warnings, fmt.tprintf("%d × LTspice symbol \"%s\" is not in spicy's library: kept as a placeholder, and the circuit does not run until it is replaced", skipped[k], k))
 	wires_cleanup(&s)
 	return s, warnings, ""
 }
