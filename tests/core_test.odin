@@ -580,3 +580,26 @@ datasheet_paths :: proc(t: ^testing.T) {
 	ds, from_model = C.comp_datasheet(&c)
 	testing.expect(t, ds == "docs/d.pdf" && !from_model, "the part's own")
 }
+
+// Choose model… of a part lists the models that fit it: the channel of a VDMOS card ("pchan")
+// its symbol's (the nmos and pmos symbols both take VDMOS: IRF540, an N-channel one, was
+// offered for a P-channel part), and the kind its symbol's (a zener's models on the zener).
+@(test)
+models_fit_their_symbol :: proc(t: ^testing.T) {
+	setup()
+	nmos, pmos := C.symbol_find("nmos"), C.symbol_find("pmos")
+	n, p := C.lib_find("irf540"), C.lib_find("irf9540")
+	testing.expect(t, nmos != nil && pmos != nil && n != nil && p != nil)
+	testing.expect(t, C.entry_fits_symbol(n, nmos))
+	testing.expect(t, !C.entry_fits_symbol(n, pmos))
+	testing.expect(t, C.entry_fits_symbol(p, pmos))
+	testing.expect(t, !C.entry_fits_symbol(p, nmos))
+	zener, diode, led := C.symbol_find("zener"), C.symbol_find("diode"), C.symbol_find("led")
+	testing.expect(t, C.kind_fits_symbol("Zener", zener))
+	testing.expect(t, C.kind_fits_symbol("TVS", zener))
+	testing.expect(t, !C.kind_fits_symbol("LED", zener))
+	testing.expect(t, !C.kind_fits_symbol("Zener", diode))
+	testing.expect(t, C.kind_fits_symbol("Switching", diode))
+	testing.expect(t, C.kind_fits_symbol("LED", led))
+	testing.expect(t, C.kind_fits_symbol("D", zener)) // a model spicy has not sorted into a kind
+}

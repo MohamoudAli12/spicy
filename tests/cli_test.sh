@@ -537,6 +537,14 @@ check "vacask VDMOS symbol: 3 nodes"  "$bin" --netlist "$work/softstart.edn" --s
 # a plain PMOS model keeps its four nodes (the body tied to the source)
 sed 's/:value "IRF9540"/:value "PX"/; s/:text ".tran 10m startup"/:text ".model PX PMOS(Vto=-2 Kp=1)\\n.tran 10m"/' "$work/softstart.edn" >"$work/pmos4.edn"
 check "MOSFET symbol: body node kept" "$bin" --netlist "$work/pmos4.edn" "M1 out N002 N001 N001 PX"
+# a model of the other polarity than its symbol: the simulator goes by the model (IRF540, an
+# N-channel MOSFET, on the P-channel symbol: its body diode carried the load, no soft start)
+sed 's/:value "IRF9540"/:value "IRF540"/' "$work/softstart.edn" >"$work/nonpmos.edn"
+check "polarity: N-MOSFET on pmos"   "$bin" --text --check "$work/nonpmos.edn" "error: M1: model IRF540 is an N-channel MOSFET, but the symbol is a P-channel MOSFET"
+sed 's/{:symbol "pmos" :ref "M1" :value "IRF9540"/{:symbol "pnp" :ref "Q1" :value "2N3904"/' "$work/softstart.edn" >"$work/npnpnp.edn"
+check "polarity: NPN on pnp"          "$bin" --text --check "$work/npnpnp.edn" "error: Q1: model 2N3904 is an NPN transistor, but the symbol is a PNP transistor"
+if "$bin" --text --check "$work/softstart.edn" 2>&1 | grep -q "the symbol is"; then fail "polarity: P-MOSFET on pmos fits"; else pass "polarity: P-MOSFET on pmos fits"; fi
+if "$bin" --run "$work/nonpmos.edn" >/dev/null 2>&1; then fail "polarity: run stops"; else pass "polarity: run stops"; fi
 check "vacask: BJT ratings left out" "$bin" --netlist "$work/ltvk.edn" --sim vacask "// QX: vceo, icrating, mfg left out (not parameters of VACASK's sp_bjt)"
 "$bin" --import-model "$work/faulty.lib" >/dev/null 2>&1; [ $? = 1 ] && pass "import stops on faults" || fail "import stops on faults"
 check "import says how"      "$bin" --import-model "$work/faulty.lib" "import it again with --repair"

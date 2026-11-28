@@ -279,6 +279,27 @@ card_refs :: proc(queue: ^[dynamic]string, text: string) {
 	}
 }
 
+// A transistor whose model is of the other polarity than its symbol (an N-channel MOSFET on
+// the P-channel symbol, an NPN on the PNP …): the simulator goes by the model, so the part
+// works the other way round from what the drawing shows. "" when it fits (or is no transistor).
+model_polarity_error :: proc(c: ^Comp, sym: ^Symbol, name: string, local: []Lib_Entry) -> string {
+	POLAR :: [?]string{"NPN", "PNP", "NMOS", "PMOS", "NJF", "PJF"}
+	NAMES :: [?]string{"an NPN transistor", "a PNP transistor", "an N-channel MOSFET", "a P-channel MOSFET", "an N-channel JFET", "a P-channel JFET"}
+	e := model_lookup(name, local)
+	if e == nil do return ""
+	dev := e.dev if e.subckt else upper(e.model_type)
+	if dev == "VDMOS" do dev = "PMOS" if strings.contains(lower(e.text), "pchan") else "NMOS"
+	polar, names := POLAR, NAMES
+	mi, si := -1, -1
+	for p, i in polar {
+		if p == dev do mi = i
+		for k in sym.models do if upper(k) == p && si < 0 do si = i
+	}
+	if mi < 0 || si < 0 do return ""
+	for k in sym.models do if upper(k) == dev do return ""
+	return fmt.tprintf("%s: model %s is %s, but the symbol is %s: the simulator goes by the model, so the part works the other way round. Correct: choose a model that fits (Choose model… lists only those), or use %s's symbol", c.ref, entry_display_name(e), names[mi], names[si], names[mi])
+}
+
 check_models :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def) {
 	// .include / .lib files
 	for t in s.texts {
@@ -316,6 +337,7 @@ check_models :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def) {
 			continue
 		}
 		name := lower(f[0])
+		if err := model_polarity_error(&c, sym, name, nl.local); len(err) > 0 do append(&nl.errors, err)
 		if defined[name] || lib_find(name) != nil do continue
 		if card_names(split_lines(sym.defs), vacask = true)[name] || card_names(split_lines(sym.vacask.defs), vacask = true)[name] do continue
 		if S.default_models && sym.editor == .Model {

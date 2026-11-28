@@ -437,6 +437,12 @@ comp_subckt :: proc(c: ^Comp, sym: ^Symbol, local: []Lib_Entry) -> ^Lib_Entry {
 // the symbol takes, a subcircuit of its device (or with as many ports as it has pins).
 entry_fits_symbol :: proc(e: ^Lib_Entry, sym: ^Symbol) -> bool {
 	if !e.subckt {
+		// a VDMOS card is either channel ("pchan" in it, else N): only on the symbol of its
+		// channel (the nmos and pmos symbols both take VDMOS)
+		if upper(e.model_type) == "VDMOS" {
+			dev := "PMOS" if strings.contains(lower(e.text), "pchan") else "NMOS"
+			if !sym_dev_matches(sym, dev) do return false
+		}
 		for k in sym.models do if e.model_type == k do return true
 		return false
 	}

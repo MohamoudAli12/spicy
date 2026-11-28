@@ -80,6 +80,18 @@ device_ratings :: proc(kind: string) -> bit_set[Rating] {
 	return ~bit_set[Rating]{}
 }
 
+// A model of this kind on a part with this symbol: a kind's models go on the symbols of their
+// kind (a zener's on the zener, not on the LED). A symbol no kind names (a vendor's own), or a
+// kind of no symbol (a model of the schematic spicy has not sorted): no objection.
+kind_fits_symbol :: proc(kind: string, sym: ^Symbol) -> bool {
+	k := kind_def(kind)
+	if k == nil || len(k.symbol) == 0 do return true
+	named := false
+	for x in KINDS do if x.symbol == sym.name do named = true
+	if !named do return true
+	return k.symbol == sym.name
+}
+
 kind_def :: proc(name: string) -> ^Kind_Def {
 	for &k in KINDS do if k.name == name do return &k
 	return nil

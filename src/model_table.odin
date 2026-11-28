@@ -34,6 +34,8 @@ mt: struct {
 	sel:       string, // the selected row's key
 	gen:       int, // the catalog the rows were copied from
 	shown_for: string, // search, kind and sort the shown rows are for
+	all_kinds: bool, // the part editor's table: the models of other kinds of its device too
+	hidden:    int, // the part editor's table: models of other kinds left out
 	arena:     virtual.Arena,
 	ready:     bool,
 	// what the user gives the selected model
@@ -63,6 +65,7 @@ model_table_open_part :: proc(sym: ^Symbol, ref, value: string) {
 	mt_reset()
 	mt.sym = strings.clone(sym.name, mt_alloc())
 	mt.title = strings.concatenate({ref, ": pick a model (", part_short_name(sym), ")"}, mt_alloc())
+	mt.all_kinds = false
 	set_str(&mt.search, "")
 	mt_load()
 	f := strings.fields(value, context.temp_allocator)
@@ -99,6 +102,7 @@ mt_load :: proc() {
 	clear(&mt.rows)
 	clear(&mt.kinds)
 	mt.shown_for = ""
+	mt.hidden = 0
 	cat := catalog_rows()
 	mt.gen = catalog_gen()
 	add :: proc(r: Catalog_Row, a: mem.Allocator) {
@@ -130,6 +134,10 @@ mt_load :: proc() {
 					// the schematic's copy of a library model: the kind, ratings and datasheet are
 					// the part's (the library row's, with what the user gave it), the copy is where
 					row := cat[i]
+					if !mt.all_kinds && !kind_fits_symbol(row.kind, sym) {
+						mt.hidden += 1
+						continue
+					}
 					if e.origin == .Directive do row.file = "this schematic"
 					else if e.origin == .Embedded do row.file = tcat("saved in the schematic (", e.file, ")")
 					add(row, a)
@@ -145,6 +153,10 @@ mt_load :: proc() {
 					for &x in row.rating do x = math.nan_f64()
 					row.file_rating = row.rating
 					row.file_kind = row.kind
+				}
+				if !mt.all_kinds && !kind_fits_symbol(row.kind, sym) {
+					mt.hidden += 1
+					continue
 				}
 				row.file = "this schematic" if e.origin == .Directive else tcat("saved in the schematic (", e.file, ")") if e.origin == .Embedded else row.file
 				add(row, a)
@@ -299,6 +311,17 @@ draw_model_table :: proc(d: ^Doc) {
 	top := cut_top(&b, fs() + 12)
 	kr := cut_right(&top, 200 * ui_scale)
 	cut_right(&top, 8)
+	// the part editor's: models of other kinds of its device (zeners for a diode …) only when asked
+	if !mt.place && (mt.hidden > 0 || mt.all_kinds) {
+		label := fmt.tprintf("Other kinds too (%d)", mt.hidden) if !mt.all_kinds else "Other kinds too"
+		ar := cut_right(&top, text_w(label) + fs() + 24)
+		cut_right(&top, 8)
+		if checkbox("mt.allkinds", ar, label, &mt.all_kinds) {
+			mt.kind = 0
+			mt_load()
+		}
+		if hover(ar) do tooltip(id_of("mt.allkinds.tip"), tcat("Models of other kinds than a ", part_short_name(symbol_find(mt.sym)), "'s (spicy sorts the models into kinds by their names and descriptions: tick to see one sorted wrongly)") if symbol_find(mt.sym) != nil else "")
+	}
 	live_field("dlg.search", top, &mt.search, "search: name, description, file …")
 	combo("mt.kind", kr, mt.kinds[:], &mt.kind)
 	cut_top(&b, 8)
