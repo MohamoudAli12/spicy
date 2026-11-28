@@ -426,6 +426,14 @@ spicy --run <file> --trace 'EXPR' [--trace 'EXPR' …]
 | `.noise` output node | `V(out)` or `V(out,ref)` | `V(out)` only (Xyce 7.10 rejects `V(out,ref)`) | `V(out)` only (spicy's translation) |
 | `.noise` `lin` sweep | Yes | Yes | Yes (spicy converts the count) |
 
+Parameters and numbers. LTspice's `.param Duty 0.46` (no `=`; ngspice, Xyce and VACASK stop at
+it) is written `.param Duty=0.46`, and `.param Tsw 1/Fsw` as `.param Tsw={1/Fsw}`. `1µ` (as
+LTspice writes it) is `1u` for every simulator: Xyce stops at `µ`. For VACASK, whose names are
+case-sensitive where SPICE's are not, parameter names and expressions are lower case (`{D/FS}`
+uses `.param Fs=500k`); the numbers of its parameters and expressions are real (VACASK's `1/2`
+is integer division, 0; SPICE's is 0.5) and without units (`5V` is `5.0`, `100KHz` is
+`100000.0`: VACASK stops at `5v`).
+
 ### 6.1 PSpice and LTspice models
 
 Vendor models are written for PSpice or LTspice. spicy runs ngspice in its compatibility mode

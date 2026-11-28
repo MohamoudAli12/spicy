@@ -139,3 +139,16 @@ is_number_token :: proc(t: string) -> bool {
 	}
 	return true
 }
+
+// LTspice's ".param Duty 0.46" and ".param Ton (Duty*Tsw)", without "=": "Duty=0.46" and
+// "Ton={(Duty*Tsw)}", which ngspice, Xyce and VACASK read (they stop at the first). rest is the
+// line after ".param"; with an "=" it stays as it is.
+param_with_equals :: proc(rest: string) -> string {
+	r := strings.trim_space(rest)
+	if strings.contains_rune(r, '=') do return r
+	sp := strings.index_any(r, " \t")
+	if sp <= 0 || !is_identifier(r[:sp]) do return r
+	name, val := r[:sp], strings.trim_space(r[sp:])
+	if is_number_token(val) || (strings.has_prefix(val, "{") && strings.has_suffix(val, "}")) do return tcat(name, "=", val)
+	return tcat(name, "={", val, "}")
+}

@@ -243,10 +243,10 @@ vacask_directives :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, vb: 
 			append(&vb.control, fmt.tprintf("sweep %s instance=\"%s\" parameter=\"dc\" from=%s to=%s step=%s", lower(f[1]), lower(f[1]), vacask_value(f[2]), vacask_value(f[3]), vacask_value(f[4])))
 			append(&vb.control, fmt.tprintf("  analysis dc%d op", n_dc))
 		case ".param", ".params":
-			rest := strings.trim_space(t[len(f[0]):])
+			rest := param_with_equals(t[len(f[0]):])
 			r, _ := strings.replace_all(rest, "{", "", context.temp_allocator)
 			r, _ = strings.replace_all(r, "}", "", context.temp_allocator)
-			r = lower(r) // as the expressions that use them (vacask_value)
+			r = vacask_numbers(lower(r)) // as the expressions that use them (vacask_value)
 			append(&vb.params, tcat("parameters ", r))
 			append(&vb.param_lines, r)
 		case ".model":
@@ -558,8 +558,40 @@ vacask_value :: proc(v: string) -> string {
 	if is_identifier(t) do return vacask_name(t)
 	// an expression: lower case, as the parameters' names (SPICE's names are case-insensitive,
 	// VACASK's are not: "{D/FS}" uses ".param Fs=500k")
-	if strings.has_prefix(t, "{") && strings.has_suffix(t, "}") do return lower(t[1:len(t) - 1])
+	if strings.has_prefix(t, "{") && strings.has_suffix(t, "}") do return vacask_numbers(lower(t[1:len(t) - 1]))
 	return t
+}
+
+// The numbers of an expression as VACASK reads them as SPICE does: real ("1/2" is 0.5 in SPICE,
+// VACASK's integer division gives 0: "1.0/2.0"), and without scale factors and units ("5V",
+// "100KHz": VACASK reads "100k" but stops at "5v", SPICE ignores the letters after the scale
+// factor). Names with digits ("r2", "v_1") are left as they are.
+vacask_numbers :: proc(e: string) -> string {
+	b := strings.builder_make(context.temp_allocator)
+	i := 0
+	for i < len(e) {
+		ch := e[i]
+		digit := ch >= '0' && ch <= '9' || (ch == '.' && i + 1 < len(e) && e[i + 1] >= '0' && e[i + 1] <= '9')
+		if !digit || (i > 0 && (is_ident_char(e[i - 1]) || e[i - 1] == '.')) {
+			strings.write_byte(&b, ch)
+			i += 1
+			continue
+		}
+		n, _ := scan_number(e[i:])
+		j := i + n
+		for j < len(e) && ((e[j] >= 'a' && e[j] <= 'z') || (e[j] >= 'A' && e[j] <= 'Z') || e[j] >= 0x80) do j += 1
+		v, ok := parse_eng(e[i:j])
+		if !ok {
+			strings.write_string(&b, e[i:j])
+			i = j
+			continue
+		}
+		x := fmt.tprintf("%.12g", v)
+		strings.write_string(&b, x)
+		if !strings.contains_any(x, ".en") do strings.write_string(&b, ".0")
+		i = j
+	}
+	return strings.to_string(b)
 }
 
 // Model names for VACASK: lower case, and never starting with a digit ("1N4148" would read as 1n).
@@ -916,10 +948,10 @@ vacask_subckt :: proc(nl: ^Netlist, o: ^Vacask_Out, e: ^Lib_Entry) {
 			add_unique(o.loads, osdi)
 			fmt.sbprintf(&body, "  %s\n", ml)
 		case strings.has_prefix(low, ".param"):
-			rest := strings.trim_space(t[strings.index_byte(t, ' ') + 1:]) if strings.index_byte(t, ' ') > 0 else ""
+			rest := param_with_equals(t[strings.index_byte(t, ' ') + 1:]) if strings.index_byte(t, ' ') > 0 else ""
 			r, _ := strings.replace_all(rest, "{", "", context.temp_allocator)
 			r, _ = strings.replace_all(r, "}", "", context.temp_allocator)
-			fmt.sbprintf(&body, "  parameters %s\n", lower(r))
+			fmt.sbprintf(&body, "  parameters %s\n", vacask_numbers(lower(r)))
 		case t[0] == '.':
 			append(&nl.errors, fmt.tprintf("VACASK, subcircuit %s: \"%s\" cannot be translated", e.name, t))
 		case:

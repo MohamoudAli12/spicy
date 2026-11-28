@@ -154,6 +154,9 @@ spice_fix_directive :: proc(l: string, base_dir := "") -> string {
 		if lower(cmd) == ".lib" && len(f) >= 3 do return fmt.tprintf("%s \"%s\" %s", cmd, p, strings.join(f[2:], " ", context.temp_allocator))
 		return fmt.tprintf("%s \"%s\"", cmd, p)
 	}
+	if len(f) >= 3 && (lower(f[0]) == ".param" || lower(f[0]) == ".params") {
+		return tcat(f[0], " ", param_with_equals(strings.trim_space(strings.trim_space(l)[len(f[0]):])))
+	}
 	// ".tran 20u": a step of a thousandth of the stop time, which SPICE needs (also when the
 	// stop time is an expression, ".tran {ts}")
 	if len(f) == 2 && lower(f[0]) == ".tran" {

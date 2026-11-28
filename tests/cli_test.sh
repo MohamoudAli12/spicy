@@ -54,8 +54,8 @@ sed 's/:value "PULSE(0 1 0 1n 1n 5u 10u) AC 1"/:value "SINE(0 1 100k 0 0 0 1)"/'
 # analyses do not see the circuit's parameters)
 sed 's/:text ".tran 20u"/:text ".tran {ts}\\n.param ts=20u"/' "$work/rc_lowpass.edn" >"$work/tsp.edn"
 check "tran stop from a param" "$bin" --netlist "$work/tsp.edn" ".tran {(ts)/1000} {ts}"
-check "vacask tran from a param" "$bin" --netlist "$work/tsp.edn" --sim vacask "analysis tran1 tran step=(ts)/1000 stop=ts"
-check "vacask param as var"  "$bin" --netlist "$work/tsp.edn" --sim vacask "  var ts=20u"
+check "vacask tran from a param" "$bin" --netlist "$work/tsp.edn" --sim vacask "analysis tran1 tran step=(ts)/1000.0 stop=ts"
+check "vacask param as var"  "$bin" --netlist "$work/tsp.edn" --sim vacask "  var ts=2e-05"
 check "vacask SINE"          "$bin" --netlist "$work/sine.edn" --sim vacask 'type="sine" sinedc=0 ampl=1 freq=100000 delay=0 theta=0 tdphase=0'
 check "vacask SINE cycles"   "$bin" --netlist "$work/sine.edn" --sim vacask "does not stop after Ncycles=1 (at 1e-05 s)"
 sed 's/100k 0 0 0 1)/100k 0 0 0 2)/' "$work/sine.edn" >"$work/sine2.edn"
@@ -143,7 +143,7 @@ C2 b 0 {Cx}
 EOF
 check "µ value: xyce"          "$bin" --netlist "$work/micro.cir" --sim xyce "C1 b 0 0.5u"
 check "µ .param: xyce"         "$bin" --netlist "$work/micro.cir" --sim xyce ".param Vin=5 Cx=0.5u"
-check "µ .param: vacask"       "$bin" --netlist "$work/micro.cir" --sim vacask "parameters vin=5 cx=0.5u"
+check "µ .param: vacask"       "$bin" --netlist "$work/micro.cir" --sim vacask "parameters vin=5.0 cx=5e-07"
 if "$bin" --netlist "$work/micro.cir" --sim xyce 2>&1 | grep -q "µ"; then fail "µ: none left for xyce"; else pass "µ: none left for xyce"; fi
 # a parameter or expression as a source's value: VACASK's dc= (it stopped at "{Vin}"); names in
 # lower case, as VACASK's are case-sensitive and SPICE's are not
@@ -160,8 +160,8 @@ R3 e 0 1k
 .end
 EOF
 check "vacask {Vin} source"    "$bin" --netlist "$work/vin.cir" --sim vacask "v1 (a 0) vsource dc=vin"
-check "vacask {expr} AC"       "$bin" --netlist "$work/vin.cir" --sim vacask "v2 (d 0) vsource dc=vin / 2 mag=1"
-check "vacask {expr} commas"   "$bin" --netlist "$work/vin.cir" --sim vacask "isource dc=max(vin, 20) * 1m"
+check "vacask {expr} AC"       "$bin" --netlist "$work/vin.cir" --sim vacask "v2 (d 0) vsource dc=vin / 2.0 mag=1"
+check "vacask {expr} commas"   "$bin" --netlist "$work/vin.cir" --sim vacask "isource dc=max(vin, 20.0) * 0.001"
 # LTspice's PULSE with expressions: "(1-D)" does not end the PULSE( … ), "FS" is .param Fs; on
 # 0.6 us after 0, for 1.35 us, every 2 us
 cat >"$work/pw.cir" <<'EOF'
@@ -174,7 +174,30 @@ R1 a 0 1k
 .meas tran off FIND V(a) AT=2.3u
 .end
 EOF
-check "vacask PULSE expressions" "$bin" --netlist "$work/pw.cir" --sim vacask "delay=d/fs rise=1e-09 fall=1e-09 width=(1-d)/fs-dead_time period=1/fs"
+check "vacask PULSE expressions" "$bin" --netlist "$work/pw.cir" --sim vacask "delay=d/fs rise=1e-09 fall=1e-09 width=(1.0-d)/fs-dead_time period=1.0/fs"
+# LTspice's ".param Duty 0.46" (no "="; every simulator stopped at it) and units after a number
+# ("5V", "100KHz": VACASK stopped at "5v"); VACASK's numbers real, as SPICE's ("1/2" is 0.5, not
+# VACASK's integer 0): v(a) = 0.46 * 5 = 2.3 V, v(b) = (1/2) / Fsw * 100k = 0.5 V
+cat >"$work/pareq.cir" <<'EOF'
+* pareq
+.param Duty 0.46
+.param Vgs 5V
+.param Fsw=100KHz
+.param Tsw 1/Fsw
+.param Half  (1/2)
+V1 a 0 {Duty*Vgs}
+R1 a 0 1k
+V2 b 0 {Half*Tsw*1e5}
+R2 b 0 1k
+.op
+.end
+EOF
+check ".param without =: spice" "$bin" --netlist "$work/pareq.cir" ".param Duty=0.46"
+check ".param expr without =" "$bin" --netlist "$work/pareq.cir" ".param Tsw={1/Fsw}"
+check ".param without =: vacask" "$bin" --netlist "$work/pareq.cir" --sim vacask "parameters duty=0.46"
+check "vacask units: 5V"       "$bin" --netlist "$work/pareq.cir" --sim vacask "parameters vgs=5.0"
+check "vacask units: KHz"      "$bin" --netlist "$work/pareq.cir" --sim vacask "parameters fsw=100000.0"
+check "vacask real division"   "$bin" --netlist "$work/pareq.cir" --sim vacask "parameters half=(1.0/2.0)"
 
 # a simulator's program set like Simulate › Simulators… does: only that path changes
 mkdir -p "$work/pcfg"
@@ -698,6 +721,8 @@ EOF
 	check "asc Rser run"         "$bin" --text --run "$work/rser.asc" "v(out)                       3.267 V"
 	check "asc Rser run (mid)"   "$bin" --text --run "$work/rser.asc" "v(mid)                       1.729 V"
 	check "µ run"                "$bin" --text --run "$work/micro.cir" "measure vb = 3.161 V"
+	check ".param without = run"  "$bin" --text --run "$work/pareq.cir" "v(a)                         2.3 V"
+	check ".param without = run (b)" "$bin" --text --run "$work/pareq.cir" "v(b)                         500 mV"
 	check "no pspice mode"     "$bin" --netlist "$work/switch.edn" "* spicy"
 	if "$bin" --netlist "$work/switch.edn" 2>&1 | grep -q ngbehavior; then fail "plain netlist without pspice mode"; else pass "plain netlist without pspice mode"; fi
 	"$bin" --text --run "$work/opamp_inverting.edn" --csv "$work/o.csv" >/dev/null 2>&1
@@ -711,6 +736,7 @@ if command -v Xyce >/dev/null 2>&1; then
 	check "xyce step currents" "$bin" --text --run "$work/step.edn" --sim xyce "I(R1)"
 	check "xyce asc Rser run"   "$bin" --text --run "$work/rser.asc" --sim xyce "  OUT                          3.267 V"
 	check "xyce µ run"          "$bin" --text --run "$work/micro.cir" --sim xyce "measure vb = 3.161 V"
+	check "xyce .param without = run" "$bin" --text --run "$work/pareq.cir" --sim xyce "  A                            2.3 V"
 else
 	echo "skip Xyce runs (Xyce is not on the PATH)"
 fi
@@ -727,6 +753,8 @@ if command -v vacask >/dev/null 2>&1; then
 	check "vacask {expr} run"    "$bin" --text --run "$work/vin.cir" --sim vacask "  e                            20 V"
 	check "vacask PULSE expr on"  "$bin" --text --run "$work/pw.cir" --sim vacask "measure on = 5 V"
 	check "vacask PULSE expr off" "$bin" --text --run "$work/pw.cir" --sim vacask "measure off = 0 V"
+	check "vacask .param without = run" "$bin" --text --run "$work/pareq.cir" --sim vacask "  a                            2.3 V"
+	check "vacask real division run" "$bin" --text --run "$work/pareq.cir" --sim vacask "  b                            500 mV"
 else
 	echo "skip VACASK runs (vacask is not on the PATH)"
 fi
