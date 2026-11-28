@@ -76,7 +76,16 @@ datasheet_open :: proc(ds, base_dir: string) -> string {
 	if !url && !file_exists(target) do return tcat("datasheet not found: ", target)
 	// SPICY_OPEN_WITH: another program (the tests use one that notes what it was given)
 	if with := os.get_env("SPICY_OPEN_WITH", context.temp_allocator); len(with) > 0 {
-		if _, err := os.process_start({command = {with, target}}); err != nil do return tcat("cannot run ", with)
+		command := []string{with, target}
+		when ODIN_OS == .Windows {
+			// a batch file runs only through the command interpreter (CreateProcess's documentation)
+			// (its path with backslashes: cmd reads a "/" in it as an option)
+			if e := file_ext_lower(with); e == "cmd" || e == "bat" {
+				w, _ := strings.replace_all(with, "/", "\\", context.temp_allocator)
+				command = {"cmd.exe", "/c", w, target}
+			}
+		}
+		if _, err := os.process_start({command = command}); err != nil do return tcat("cannot run ", with)
 	} else if !open_external(target) {
 		return tcat("cannot open ", target)
 	}

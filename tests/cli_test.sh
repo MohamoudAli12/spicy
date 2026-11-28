@@ -12,6 +12,9 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
 # Git Bash on Windows: use the folder's Windows name (C:/...), which both bash and the
 # Windows binary understand, so no path has to be converted between the two
+# macOS: the folder by its real path (/var is a link to /private/var, and spicy writes the
+# real one); before the Windows name below (pwd gives Git Bash's /c/... form)
+work=$(cd "$work" && pwd -P)
 if command -v cygpath >/dev/null 2>&1; then work=$(cygpath -m "$work"); fi
 trap 'rm -rf "$work"' EXIT
 export SPICY_CONFIG_DIR="$work/cfg"
@@ -735,20 +738,32 @@ check "datasheet: none"        "$bin" --datasheet "$dsp" D1 "D1 has no datasheet
 check "datasheet: no part"     "$bin" --datasheet "$dsp" D9 "no part D9"
 check "datasheet: bad option"  "$bin" --datasheet "$dsp" D1 --nope "unknown option --nope"
 "$bin" --set "$dsp" D1.datasheet=docs/1n4148.pdf >/dev/null
-check "datasheet: the part's"  "$bin" --datasheet "$dsp" D1 ":from \"part\" :path \"$work/dsp/docs/1n4148.pdf\" :exists true"
-check "datasheet: from any folder" sh -c "cd / && '$bin' --datasheet '$dsp' D1" ":path \"$work/dsp/docs/1n4148.pdf\""
+# the path as the system writes it: on Windows with "\" (spicy hands it to Explorer and PDF
+# viewers), in EDN each "\" written "\\"
+native() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
+ds_path=$(native "$work/dsp/docs/1n4148.pdf")
+ds_edn=${ds_path//\\/\\\\}
+check "datasheet: the part's"  "$bin" --datasheet "$dsp" D1 ":from \"part\" :path \"$ds_edn\" :exists true"
+check "datasheet: from any folder" sh -c "cd / && '$bin' --datasheet '$dsp' D1" ":path \"$ds_edn\""
 for sim in ngspice xyce vacask; do
 	if [ "$("$bin" --netlist "$dsp" --sim $sim | tail -n +2)" = "$("$bin" --netlist "$root/examples/rc_lowpass.edn" --sim $sim | tail -n +2)" ]; then pass "datasheet: $sim netlist unchanged"; else fail "datasheet: $sim netlist unchanged"; fi
 done
 check "datasheet: the model's" sh -c "'$bin' --model-info 1N4148 datasheet=https://example.com/1n4148.pdf >/dev/null && '$bin' --set '$dsp' D1.datasheet= >/dev/null && '$bin' --datasheet '$dsp' D1" ':from "model" :link "https://example.com/1n4148.pdf"'
 check "datasheet: listed"      "$bin" --list models Switching ':datasheet "https://example.com/1n4148.pdf"'
-printf '#!/bin/sh\necho "$1" >>"%s/opened.txt"\n' "$work" >"$work/openwith.sh"
-chmod +x "$work/openwith.sh"
-SPICY_OPEN_WITH="$work/openwith.sh" "$bin" --datasheet "$dsp" D1 --open >/dev/null
+# the program that notes what it was given: a .cmd on Windows (it runs no shell script)
+if command -v cygpath >/dev/null 2>&1; then
+	openwith="$work/openwith.cmd"
+	printf '@>>"%s" echo %%~1\r\n' "$(native "$work/opened.txt")" >"$openwith"
+else
+	openwith="$work/openwith.sh"
+	printf '#!/bin/sh\necho "$1" >>"%s/opened.txt"\n' "$work" >"$openwith"
+	chmod +x "$openwith"
+fi
+SPICY_OPEN_WITH="$openwith" "$bin" --datasheet "$dsp" D1 --open >/dev/null
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$work/opened.txt" ] && break; sleep 0.1; done
-grep -qx "https://example.com/1n4148.pdf" "$work/opened.txt" 2>/dev/null && pass "datasheet: --open" || fail "datasheet: --open (got $(cat "$work/opened.txt" 2>/dev/null))"
+tr -d '\r' <"$work/opened.txt" 2>/dev/null | grep -qx "https://example.com/1n4148.pdf" && pass "datasheet: --open" || fail "datasheet: --open (got $(cat "$work/opened.txt" 2>/dev/null))"
 "$bin" --set "$dsp" D1.datasheet=docs/gone.pdf >/dev/null
-check "datasheet: --open a missing file" env SPICY_OPEN_WITH="$work/openwith.sh" "$bin" --datasheet "$dsp" D1 --open "datasheet not found: $work/dsp/docs/gone.pdf"
+check "datasheet: --open a missing file" env SPICY_OPEN_WITH="$openwith" "$bin" --datasheet "$dsp" D1 --open "datasheet not found: $(native "$work/dsp/docs/gone.pdf")"
 "$bin" --model-info 1N4148 --forget >/dev/null
 # a part's SPICE model (Show SPICE model): as the netlist takes it, then what it uses, in turn
 check "spice model: built-in"  "$bin" --spice-model "$root/examples/rc_lowpass.edn" D1 ".model 1N4148 D(IS=2.52n"
