@@ -434,6 +434,22 @@ uses `.param Fs=500k`); the numbers of its parameters and expressions are real (
 is integer division, 0; SPICE's is 0.5) and without units (`5V` is `5.0`, `100KHz` is
 `100000.0`: VACASK stops at `5v`).
 
+Part names. SPICE takes an element's kind from the first letter of its name; LTspice lets a part
+have any name. A part whose name does not start with its kind's letter gets it in front in a
+SPICE netlist, as LTspice does: a current source `Loadstep` is `ILoadstep` (as written it would
+be an inductor). For VACASK, whose names are free, only a name that is one of its keywords gets
+the letter: a resistor `Load` is `rload` (`load …` at the start of a line loads a device file).
+`I(Loadstep)` and `I(Load)` in plots, probes and `.meas` find them either way.
+
+LTspice's `.tran … startup` ramps the independent sources up from zero over the first 20 µs.
+No simulator here has it: ngspice's `.option ramptime` needs a build option (`XSPICE_EXP`) its
+usual builds lack, and is ignored without it; Xyce's `NOOP` and VACASK's `icmode="uic"` start
+from zero with the sources at full value. spicy takes `startup` off the `.tran` line and writes
+each source of the schematic with a DC value as `DC v PWL(0 0 20u v)`: the transient ramps up as
+LTspice's, and an `.op` or `.ac` still sees `v`. Sources that change with time (`PULSE`, `SIN`,
+`PWL` …) stay as written, with a warning when they are not 0 at t = 0; LTspice ramps those too.
+Sources in subcircuits are not ramped, as in LTspice.
+
 ### 6.1 PSpice and LTspice models
 
 Vendor models are written for PSpice or LTspice. spicy runs ngspice in its compatibility mode

@@ -128,6 +128,70 @@ if "$bin" --import-asc "$work/rser.asc" "$work/rser.edn" 2>&1 | grep -q "left ou
 printf '* LTspice netlist\nV1 out 0 5 Rser=1k\nR1 out 0 1k\nC1 out 0 1u Rser=10m Lser=1n\n.op\n.end\n' >"$work/rser.cir"
 check "netlist Rser: source"   "$bin" --netlist "$work/rser.cir" "RV1_rser out n_v1_1 1k"
 check "netlist Lser: capacitor" "$bin" --netlist "$work/rser.cir" "LC1_esl n_c1_1 n_c1_2 1n"
+# a part whose name does not start with its kind's letter (LTspice's "Loadstep", a current source):
+# the letter in front in a SPICE netlist ("Loadstep" was an inductor); for VACASK only a name that
+# is one of its keywords ("load …" loads a device file); I(Loadstep) and I(Load) still found
+cat >"$work/lname.asc" <<'EOF'
+Version 4
+SHEET 1 880 680
+FLAG 0 16 out
+FLAG 0 96 0
+FLAG 80 16 out
+FLAG 80 96 0
+FLAG 160 0 out
+FLAG 160 80 0
+SYMBOL voltage 0 0 R0
+SYMATTR InstName V1
+SYMATTR Value 10
+SYMATTR SpiceLine Rser=1k
+SYMBOL res 64 0 R0
+SYMATTR InstName Load
+SYMATTR Value 1k
+SYMBOL current 160 0 R0
+SYMATTR InstName Loadstep
+SYMATTR Value PWL(0 0 1m 0 1.001m 2m)
+TEXT 0 300 Left 2 !.tran 2m\n.meas tran il FIND I(Loadstep) AT=1.5m\n.meas tran ir FIND I(Load) AT=1.5m
+EOF
+check "name: current source"   "$bin" --netlist "$work/lname.asc" "ILoadstep out 0 PWL(0 0 1m 0 1.001m 2m)"
+check "name: resistor"         "$bin" --netlist "$work/lname.asc" "RLoad out 0 1k"
+check "name: vacask keyword"   "$bin" --netlist "$work/lname.asc" --sim vacask "rload (load_a 0) spicy_r r=1000"
+check "name: vacask as named"  "$bin" --netlist "$work/lname.asc" --sim vacask "loadstep (loadstep_p 0) isource"
+check "name: V1 unchanged"     "$bin" --netlist "$work/lname.asc" "V1 n_v1_1 0 10"
+# LTspice's .tran … startup: no simulator has it (ngspice's ramptime needs a build option); the
+# DC sources ramp up from 0 over 20 us as LTspice's, an .op still sees their value
+cat >"$work/startup.cir" <<'EOF'
+* startup
+.param Vin=12
+V1 in 0 {Vin}
+R1 in a 1k
+C1 a 0 10n
+V2 b 0 DC 5 AC 1
+R2 b 0 1k
+V3 p 0 PULSE(1 3 50u 1n 1n 10u 20u)
+R3 p 0 1k
+V4 z 0 PULSE(0 1 50u 1n 1n 10u 20u)
+R5 z 0 1k
+I1 0 q 2m
+R4 q 0 1k
+.tran 100u startup
+.meas tran in10 FIND V(in) AT=10u
+.meas tran in30 FIND V(in) AT=30u
+.meas tran q10 FIND V(q) AT=10u
+.end
+EOF
+check "startup: source"        "$bin" --netlist "$work/startup.cir" "V1 in 0 DC {Vin} PWL(0 0 20u {Vin})"
+check "startup: AC kept"       "$bin" --netlist "$work/startup.cir" "V2 b 0 DC 5 PWL(0 0 20u 5) AC 1"
+check "startup: current"       "$bin" --netlist "$work/startup.cir" "I1 0 q DC 2m PWL(0 0 20u 2m)"
+check "startup: .tran"         "$bin" --netlist "$work/startup.cir" ".tran 100n 100u"
+check "startup: PULSE kept"    "$bin" --netlist "$work/startup.cir" "V3 p 0 PULSE(1 3 50u 1n 1n 10u 20u)"
+check "startup: PULSE warning" "$bin" --netlist "$work/startup.cir" "V3: LTspice's startup would ramp it up from 0 too; spicy ramps DC sources only, so this one is 1 from t = 0"
+if "$bin" --netlist "$work/startup.cir" 2>&1 | grep -q "V4:"; then fail "startup: no warning for a PULSE from 0"; else pass "startup: no warning for a PULSE from 0"; fi
+check "startup: vacask"        "$bin" --netlist "$work/startup.cir" --sim vacask 'v1 (in 0) vsource dc=vin type="pwl" wave=[0, 0, 2e-05, vin]'
+check "startup: vacask .tran"  "$bin" --netlist "$work/startup.cir" --sim vacask "analysis tran1 tran step=1e-07 stop=0.0001 maxstep=1e-07"
+sed 's/^\.tran 100u startup$/.tran 100u startup uic/' "$work/startup.cir" >"$work/startup_uic.cir"
+check "startup uic: .tran"     "$bin" --netlist "$work/startup_uic.cir" ".tran 100n 100u uic"
+sed 's/^\.tran 100u startup$/.tran 100u/' "$work/startup.cir" >"$work/nostartup.cir"
+check "no startup: as written" "$bin" --netlist "$work/nostartup.cir" "V1 in 0 {Vin}"
 # "µ" after a number (LTspice writes "1µ"): "u", which Xyce reads (it stopped at "1µ") and VACASK
 # in its parameters; 1k into 0.5µ + {Cx} = 1 uF is 63.2 % of 5 V (3.161 V) after 1 ms
 cat >"$work/micro.cir" <<'EOF'
@@ -723,6 +787,13 @@ EOF
 	check "µ run"                "$bin" --text --run "$work/micro.cir" "measure vb = 3.161 V"
 	check ".param without = run"  "$bin" --text --run "$work/pareq.cir" "v(a)                         2.3 V"
 	check ".param without = run (b)" "$bin" --text --run "$work/pareq.cir" "v(b)                         500 mV"
+	# I(Loadstep): ngspice's i(@iloadstep[current]) (a current source's current was not found)
+	check "name: current run"    "$bin" --text --run "$work/lname.asc" "measure il = 2 mA"
+	check "name: resistor run"   "$bin" --text --run "$work/lname.asc" "measure ir = 4 mA"
+	# startup: 12 V ramped over 20 us is 6 V at 10 us; 2 mA into 1k is 1 V at 10 us
+	check "startup run"          "$bin" --text --run "$work/startup.cir" "measure in10 = 6 V"
+	check "startup run (30 us)"  "$bin" --text --run "$work/startup.cir" "measure in30 = 12 V"
+	check "startup run (current)" "$bin" --text --run "$work/startup.cir" "measure q10 = 1 V"
 	check "no pspice mode"     "$bin" --netlist "$work/switch.edn" "* spicy"
 	if "$bin" --netlist "$work/switch.edn" 2>&1 | grep -q ngbehavior; then fail "plain netlist without pspice mode"; else pass "plain netlist without pspice mode"; fi
 	"$bin" --text --run "$work/opamp_inverting.edn" --csv "$work/o.csv" >/dev/null 2>&1
@@ -737,6 +808,8 @@ if command -v Xyce >/dev/null 2>&1; then
 	check "xyce asc Rser run"   "$bin" --text --run "$work/rser.asc" --sim xyce "  OUT                          3.267 V"
 	check "xyce µ run"          "$bin" --text --run "$work/micro.cir" --sim xyce "measure vb = 3.161 V"
 	check "xyce .param without = run" "$bin" --text --run "$work/pareq.cir" --sim xyce "  A                            2.3 V"
+	check "xyce name run"       "$bin" --text --run "$work/lname.asc" --sim xyce "measure il = 2 mA"
+	check "xyce startup run"    "$bin" --text --run "$work/startup.cir" --sim xyce "measure in10 = 6 V"
 else
 	echo "skip Xyce runs (Xyce is not on the PATH)"
 fi
@@ -755,6 +828,10 @@ if command -v vacask >/dev/null 2>&1; then
 	check "vacask PULSE expr off" "$bin" --text --run "$work/pw.cir" --sim vacask "measure off = 0 V"
 	check "vacask .param without = run" "$bin" --text --run "$work/pareq.cir" --sim vacask "  a                            2.3 V"
 	check "vacask real division run" "$bin" --text --run "$work/pareq.cir" --sim vacask "  b                            500 mV"
+	check "vacask name run"      "$bin" --text --run "$work/lname.asc" --sim vacask "measure ir = 4 mA"
+	check "vacask name run (I)"  "$bin" --text --run "$work/lname.asc" --sim vacask "measure il = 2 mA"
+	check "vacask startup run"   "$bin" --text --run "$work/startup.cir" --sim vacask "measure in10 = 6 V"
+	check "vacask startup run (current)" "$bin" --text --run "$work/startup.cir" --sim vacask "measure q10 = 1 V"
 else
 	echo "skip VACASK runs (vacask is not on the PATH)"
 fi

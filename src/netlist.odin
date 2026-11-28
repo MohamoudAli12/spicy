@@ -38,10 +38,12 @@ netlist_build :: proc(s: ^Schematic, sim: ^Simulator_Def, title: string, base_di
 	nl.meas_lines = card_lines(s, sim, ".meas")
 	meas_check(&nl, s)
 	step_check(&nl, sim, card_lines(s, sim, ".step"))
+	// LTspice's .tran … startup: the sources ramped up in a copy of the schematic
+	sw := startup_schematic(&nl, s) if tran_startup(s, sim) else s
 	if sim.dialect == .Vacask {
-		nl.text = netlist_vacask(&nl, s, sim, title)
+		nl.text = netlist_vacask(&nl, sw, sim, title)
 	} else {
-		nl.text = netlist_spice(&nl, s, sim, title)
+		nl.text = netlist_spice(&nl, sw, sim, title)
 		if sim_is_xyce(sim) do nl.text = xyce_fixups(nl.text)
 		cards := netlist_cards_deep(nl.text, base_dir)
 		if sim_is_ngspice(sim) {
@@ -134,6 +136,8 @@ fill_template :: proc(nl: ^Netlist, tmpl: string, c: ^Comp, sym: ^Symbol, pin_no
 		switch key {
 		case "ref":
 			val, found = lower(c.ref) if vacask else c.ref, true
+			// the element's name at the start of a line: with the letter of its kind
+			if i == len(key) + 2 || tmpl[i - len(key) - 3] == '\n' do val = element_name(c.ref, sym, vacask)
 		case "value":
 			val, found = vacask_value(c.value) if vacask else c.value, true
 			// a model name ("DI_BC807-16"): as its model line names it
@@ -320,6 +324,30 @@ check_models :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def) {
 // vsns_<ref>_<pin> runs from the pin's net to the node <ref>_<pin>, which the pin then
 // connects to (lower case, the pin name made an identifier by sanitize). The probe
 // templates of settings.edn ("vsns_{ref}_{pin}:flow(br)") name them the same way.
+// The name of a part's element in the netlist. SPICE: its name, with the letter of its kind in
+// front when it does not start with it ("Loadstep", a current source: "ILoadstep"), as LTspice
+// writes it; SPICE takes the kind from the first letter ("Loadstep" would be an inductor). Only
+// for symbols whose line starts with the name ("{ref} …"; not "X{ref} …"). VACASK: its name in
+// lower case, with the letter in front when that is one of VACASK's keywords ("Load": "rload";
+// "load …" at the start of a line loads a device file).
+element_name :: proc(ref: string, sym: ^Symbol, vacask: bool) -> string {
+	if vacask {
+		l := lower(ref)
+		for k in VACASK_KEYWORDS do if l == k {
+			p := lower(sym.prefix[:1]) if sym != nil && len(sym.prefix) > 0 else "x"
+			return tcat(p, l)
+		}
+		return l
+	}
+	if sym == nil || len(sym.prefix) == 0 || len(ref) == 0 do return ref
+	if !strings.has_prefix(strings.trim_space(sym.spice), "{ref}") do return ref
+	if lower(ref[:1]) == lower(sym.prefix[:1]) do return ref
+	return tcat(sym.prefix[:1], ref)
+}
+
+// The words VACASK reads at the start of a line (its lexer, lib/dfllexer.l of VACASK 0.3.4).
+VACASK_KEYWORDS := [?]string{"include", "section", "endsection", "model", "global", "ground", "analysis", "sweep", "load", "embed", "subckt", "ends", "parameters", "control", "endc", "save"}
+
 sense_node :: proc(ref, pin: string) -> string {return tcat(lower(ref), "_", sanitize(pin))}
 
 sense_source :: proc(ref, pin: string) -> string {return tcat("vsns_", sense_node(ref, pin))}

@@ -397,3 +397,76 @@ lt_instance_params :: proc(c: ^Comp, warnings: ^[dynamic]string) {
 	}
 	if changed do set_str(&c.value, strings.join(kept[:], " ", context.temp_allocator))
 }
+
+// LTspice's ".tran … startup": its independent sources ramp up from zero over the first 20 µs
+// (top level only: not those in subcircuits). No simulator here has it: ngspice's
+// ".option ramptime" needs a build option (XSPICE_EXP) its usual builds lack, and is ignored
+// without it; Xyce's NOOP and VACASK's icmode="uic" start from zero with the sources at full
+// value. spicy writes each top-level source with a DC value as "DC v PWL(0 0 20u v)": the
+// transient starts at 0 and ramps as LTspice's (ngspice, Xyce and VACASK take the PWL's value
+// at t = 0), and an .op or .ac still sees v.
+LT_STARTUP_RAMP :: "20u"
+
+// Whether a .tran of the schematic has LTspice's startup.
+tran_startup :: proc(s: ^Schematic, sim: ^Simulator_Def) -> bool {
+	for l in directive_lines(s, sim) {
+		f := strings.fields(l, context.temp_allocator)
+		if len(f) == 0 || lower(f[0]) != ".tran" do continue
+		for w in f[1:] do if lower(w) == "startup" do return true
+	}
+	return false
+}
+
+// A source's value ramped as LTspice's startup ramps it, or ok false when it is not a DC value
+// (or is 0). A source that changes with time already (PULSE, SIN, PWL …) stays as it is: t0 is
+// its value at t = 0 ("" when that is 0, or not known).
+startup_value :: proc(v: string) -> (out: string, ok: bool, t0: string) {
+	toks := source_tokens(v)
+	dc := ""
+	rest := make([dynamic]string, context.temp_allocator)
+	for i := 0; i < len(toks); i += 1 {
+		lt := lower(toks[i])
+		switch {
+		case lt == "dc" && i + 1 < len(toks):
+			dc = toks[i + 1]
+			i += 1
+		case lt == "ac":
+			append(&rest, ..toks[i:])
+			i = len(toks)
+		case strings.contains_rune(lt, '(') && lt[0] != '{':
+			// PULSE(V1 …), SIN(VO …), EXP(V1 …), SFFM(VO …): the first argument; PWL(T1 V1 …): the second
+			o := strings.index_byte(lt, '(')
+			c := strings.last_index_byte(lt, ')')
+			a := value_words(toks[i][o + 1:c if c > o else len(lt)])
+			k := 1 if strings.has_prefix(lt, "pwl") else 0
+			if k < len(a) {
+				if x, xok := parse_eng(a[k]); !xok || x != 0 do t0 = a[k]
+			}
+			return v, false, t0
+		case len(dc) == 0:
+			dc = toks[i]
+		case:
+			append(&rest, toks[i])
+		}
+	}
+	if len(dc) == 0 do return v, false, ""
+	if x, xok := parse_eng(dc); xok && x == 0 && is_number_token(dc) do return v, false, ""
+	tail := tcat(" ", strings.join(rest[:], " ", context.temp_allocator)) if len(rest) > 0 else ""
+	return fmt.tprintf("DC %s PWL(0 0 %s %s)%s", dc, LT_STARTUP_RAMP, dc, tail), true, ""
+}
+
+// The schematic as the simulator gets it with LTspice's startup: a copy whose top-level sources
+// ramp up; a warning for each source that changes with time and is not 0 at t = 0.
+startup_schematic :: proc(nl: ^Netlist, s: ^Schematic) -> ^Schematic {
+	sw := new_clone(s^, context.temp_allocator)
+	sw.comps = make([dynamic]Comp, len(s.comps), context.temp_allocator)
+	copy(sw.comps[:], s.comps[:])
+	for &c in sw.comps {
+		sym := symbol_find(c.sym)
+		if sym == nil || sym.editor != .Source do continue
+		v, ok, t0 := startup_value(c.value)
+		if ok do c.value = v
+		else if len(t0) > 0 do append(&nl.warnings, fmt.tprintf("%s: LTspice's startup would ramp it up from 0 too; spicy ramps DC sources only, so this one is %s from t = 0", c.ref, t0))
+	}
+	return sw
+}

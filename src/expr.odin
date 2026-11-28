@@ -527,16 +527,20 @@ passive_ac_current :: proc(p: ^Parser, ref: string) -> (Expr_Val, bool) {
 // Raw vector names that hold the current of a part (tag "") or of one of its pins.
 current_vector_names :: proc(sim: ^Simulator_Def, c: ^Comp, sym: ^Symbol, tag: string) -> []string {
 	out := make([dynamic]string, context.temp_allocator)
-	ref := c.ref
+	// the element's name in the netlist ("ILoadstep" for a current source named "Loadstep");
+	// VACASK's part currents are its sense sources', named after the part
+	vk := sim.dialect == .Vacask
+	el := element_name(c.ref, sym, vk)
+	ref := c.ref if vk else el
 	lref := lower(ref)
 	// pins that name an element (a transformer's windings): that element's current; the part
 	// as a whole is its first pin's
 	for pd, k in sym.pins {
 		if len(pd.element) == 0 do continue
 		if len(tag) == 0 ? k != 0 : !(strings.equal_fold(pd.cur, tag) || strings.equal_fold(pd.name, tag)) do continue
-		el, _ := strings.replace_all(pd.element, "{ref}", ref, context.temp_allocator)
-		lel := lower(el)
-		append(&out, probe_name(sim.current, el, el, "", ""), probe_name(sim.current, lel, lel, "", ""), tcat(lel, "#branch"))
+		pel, _ := strings.replace_all(pd.element, "{ref}", c.ref, context.temp_allocator)
+		lel := lower(pel)
+		append(&out, probe_name(sim.current, pel, pel, "", ""), probe_name(sim.current, lel, lel, "", ""), tcat(lel, "#branch"))
 		// VACASK: the sense source at the pin
 		pin := sanitize(pd.name)
 		append(&out, probe_name(sim.pin_current, ref, ref, pd.cur, pin), probe_name(sim.pin_current, lref, lref, pd.cur, pin))
@@ -545,17 +549,19 @@ current_vector_names :: proc(sim: ^Simulator_Def, c: ^Comp, sym: ^Symbol, tag: s
 	// a part with non-ideal values: the 0 V source at its first pin (SPICE; VACASK's
 	// sense source has the same name)
 	if len(tag) == 0 && sym.probe != .Source && len(sym.pins) > 0 && nonideal_active(c, sym) {
-		sn := sense_source(ref, sym.pins[0].name)
+		sn := sense_source(c.ref, sym.pins[0].name)
 		append(&out, tcat("i(", sn, ")"), tcat(sn, "#branch"))
 	}
 	if len(tag) == 0 {
 		if sym.probe == .Source {
-			append(&out, probe_name(sim.source_current, ref, ref, "", ""), probe_name(sim.source_current, lref, lref, "", ""))
+			append(&out, probe_name(sim.source_current, el, el, "", ""), probe_name(sim.source_current, lower(el), lower(el), "", ""))
 		} else {
 			pin := sanitize(sym.pins[0].name) if len(sym.pins) > 0 else ""
 			append(&out, probe_name(sim.current, ref, ref, sym.cur, pin), probe_name(sim.current, lref, lref, sym.cur, pin))
+			// ngspice's current source: i(@i1[current])
+			if !vk do append(&out, tcat("i(@", lower(el), "[current])"))
 			// a part that is a subcircuit instance: the sense source spicy puts at its pin
-			if len(pin) > 0 do append(&out, tcat("i(", sense_source(ref, sym.pins[0].name), ")"))
+			if len(pin) > 0 do append(&out, tcat("i(", sense_source(c.ref, sym.pins[0].name), ")"))
 		}
 		return out[:]
 	}
@@ -563,7 +569,7 @@ current_vector_names :: proc(sim: ^Simulator_Def, c: ^Comp, sym: ^Symbol, tag: s
 		if strings.equal_fold(pd.cur, tag) || strings.equal_fold(pd.name, tag) {
 			pin := sanitize(pd.name)
 			append(&out, probe_name(sim.pin_current, ref, ref, pd.cur, pin), probe_name(sim.pin_current, lref, lref, pd.cur, pin))
-			append(&out, tcat("i(", sense_source(ref, pd.name), ")"))
+			append(&out, tcat("i(", sense_source(c.ref, pd.name), ")"))
 		}
 	}
 	return out[:]

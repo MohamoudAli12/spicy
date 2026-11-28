@@ -292,7 +292,7 @@ vacask_tran :: proc(nl: ^Netlist, f: []string, n: int, vb: ^Vacask_Build) -> str
 	uic := false
 	for x in f[1:] {
 		if lower(x) == "uic" do uic = true
-		else do append(&pos, x)
+		else if lower(x) != "startup" do append(&pos, x) // the sources ramp up instead (startup_schematic)
 	}
 	if len(pos) == 1 {
 		// the step: a thousandth of the stop time (an expression's too, ".tran {ts}")

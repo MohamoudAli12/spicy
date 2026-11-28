@@ -146,8 +146,18 @@ spice_subckt_instance :: proc(nl: ^Netlist, b: ^strings.Builder, c: ^Comp, sym: 
 }
 
 // LTspice accepts ".tran <stop>"; SPICE needs ".tran <step> <stop>".
-spice_fix_directive :: proc(l: string, base_dir := "") -> string {
+spice_fix_directive :: proc(line: string, base_dir := "") -> string {
+	l := line
 	f := strings.fields(l, context.temp_allocator)
+	// LTspice's startup: the sources ramp up instead (startup_schematic)
+	if len(f) > 1 && lower(f[0]) == ".tran" {
+		kept := make([dynamic]string, context.temp_allocator)
+		for w in f do if lower(w) != "startup" do append(&kept, w)
+		if len(kept) < len(f) {
+			f = kept[:]
+			l = strings.join(f, " ", context.temp_allocator)
+		}
+	}
 	// relative .include / .lib paths: from the schematic's folder (the run may be elsewhere)
 	if p, ok := include_path(l, base_dir); ok && len(base_dir) > 0 && file_exists(p) {
 		cmd := f[0]
@@ -159,9 +169,11 @@ spice_fix_directive :: proc(l: string, base_dir := "") -> string {
 	}
 	// ".tran 20u": a step of a thousandth of the stop time, which SPICE needs (also when the
 	// stop time is an expression, ".tran {ts}")
-	if len(f) == 2 && lower(f[0]) == ".tran" {
-		if stop, ok := parse_eng(f[1]); ok do return tcat(".tran ", fmt_spice(stop / 1000), " ", f[1])
-		if strings.has_prefix(f[1], "{") && strings.has_suffix(f[1], "}") do return tcat(".tran {(", f[1][1:len(f[1]) - 1], ")/1000} ", f[1])
+	// (".tran 100m uic" too: the stop time is the only number)
+	if len(f) >= 2 && lower(f[0]) == ".tran" && (len(f) == 2 || (len(f) == 3 && lower(f[2]) == "uic")) {
+		uic := " uic" if len(f) == 3 else ""
+		if stop, ok := parse_eng(f[1]); ok do return tcat(".tran ", fmt_spice(stop / 1000), " ", f[1], uic)
+		if strings.has_prefix(f[1], "{") && strings.has_suffix(f[1], "}") do return tcat(".tran {(", f[1][1:len(f[1]) - 1], ")/1000} ", f[1], uic)
 	}
 	return l
 }
