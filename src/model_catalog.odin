@@ -202,7 +202,10 @@ catalog_row :: proc(e: ^Lib_Entry) -> (row: Catalog_Row, ok: bool) {
 entry_device :: proc(e: ^Lib_Entry) -> string {
 	if e.subckt {
 		switch e.dev {
-		case "D", "NPN", "PNP", "NMOS", "PMOS", "NJF", "PJF": return e.dev
+		case "D":
+			if !diode_like(e) do return "SUB"
+			return e.dev
+		case "NPN", "PNP", "NMOS", "PMOS", "NJF", "PJF": return e.dev
 		}
 		if _, ok := opamp_symbol(e, e.name, ""); ok do return "OPAMP"
 		return "SUB"
@@ -212,6 +215,20 @@ entry_device :: proc(e: ^Lib_Entry) -> string {
 	case "VDMOS": return "PMOS" if strings.contains(lower(e.text), "pchan") else "NMOS"
 	}
 	return ""
+}
+
+// A subcircuit with diodes in it that is a diode: two ports, or more (a dual diode, BAV99) of
+// diodes and passives only. A TL431 (three ports, behavioural and controlled sources) is not.
+@(private = "file")
+diode_like :: proc(e: ^Lib_Entry) -> bool {
+	if len(e.ports) <= 2 do return true
+	for l, n in spice_lines(e.text) {
+		if n == 0 || len(l) == 0 do continue
+		switch l[0] {
+		case 'B', 'b', 'E', 'e', 'F', 'f', 'G', 'g', 'H', 'h': return false
+		}
+	}
+	return true
 }
 
 // A diode's kind from the words that name it: the vendor's category and description, then

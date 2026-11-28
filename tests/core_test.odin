@@ -488,6 +488,15 @@ model_catalog :: proc(t: ^testing.T) {
 D1 A K DINNER
 .ENDS
 .MODEL DINNER D(IS=1n BV=7)
+.SUBCKT TLREG A K R
+D1 A K DINNER
+E1 x 0 R A 1
+G1 K A x 0 1
+.ENDS
+.SUBCKT DUALD A1 A2 K
+D1 A1 K DINNER
+D2 A2 K DINNER
+.ENDS
 `
 	C.parse_lib_into(&C.model_lib, lib, .Library, "/x/Diodes_Zeners.lib")
 	C.models_gen += 1
@@ -504,4 +513,10 @@ D1 A K DINNER
 	testing.expectf(t, plain != nil && plain.kind == "Zener" && near(plain.rating[.V], 5.1, 1e-12) && plain.symbol == "zener", "BZXPLAIN: %v", plain)
 	testing.expect(t, row("zwrap") != nil, "the subcircuit is a row")
 	testing.expect(t, row("dinner") == nil, "a model only a subcircuit uses is not a row")
+	// a shunt regulator built of a diode and controlled sources is a subcircuit, not a diode;
+	// a dual diode of three pins is still a diode
+	tl := row("tlreg")
+	testing.expectf(t, tl != nil && tl.kind == "Subcircuit", "TLREG: %v", tl)
+	dual := row("duald")
+	testing.expectf(t, dual != nil && C.kind_def(dual.kind) != nil && C.kind_def(dual.kind).family == "Diodes", "DUALD: %v", dual)
 }
