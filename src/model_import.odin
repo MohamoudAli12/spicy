@@ -19,8 +19,17 @@ Import_Result :: struct {
 
 // Where an import puts its copy: models/<name>.lib ("DMT10H003SPSWQ.spice.txt" → DMT10H003SPSWQ.lib).
 import_dest :: proc(src: string) -> string {
+	// without its model-file extensions: "Zener Diodes.spice.txt" is "Zener Diodes.lib", and
+	// a dot in the name stays ("Schottky (Less than .5A).spice.txt")
 	stem := base_name(src)
-	if dot := strings.index_byte(stem, '.'); dot > 0 do stem = stem[:dot]
+	for {
+		dot := strings.last_index_byte(stem, '.')
+		if dot <= 0 do break
+		known := false
+		for x in MODEL_EXTS do if strings.equal_fold(stem[dot + 1:], x) do known = true
+		if !known do break
+		stem = stem[:dot]
+	}
 	return path_join(user_models_dir(), tcat(stem, ".lib"))
 }
 

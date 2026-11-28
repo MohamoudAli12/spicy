@@ -303,6 +303,13 @@ check "repaired: port line"    grep "^\.SUBCKT PAF" "$models_dir/paf.lib" ".SUBC
 check "ports as parameters: symbol" grep -A1 '{:name "PAF"' "$imported" ':like "nmos"'
 printf '.SUBCKT PRR a b R=10\nR1 a b {R}\n.ENDS\n' > "$work/prr.lib"
 check "real parameter kept"    "$bin" --check-model "$work/prr.lib" "no problems found"
+# a dot in a file's name is not its extension: two files, two copies
+printf '.SUBCKT SKA a k\nD1 a k DS\n.MODEL DS D(IS=1n)\n.ENDS\n' > "$work/Sk (Less than .5A).spice.txt"
+printf '.SUBCKT SKB a k\nD1 a k DS\n.MODEL DS D(IS=2n)\n.ENDS\n' > "$work/Sk (.5A and Above).spice.txt"
+check "import name with a dot" "$bin" --import-model "$work/Sk (Less than .5A).spice.txt" "Sk (Less than .5A).lib"
+"$bin" --import-model "$work/Sk (.5A and Above).spice.txt" >/dev/null 2>&1
+check "dotted names: two copies" cat "$models_dir/Sk (Less than .5A).lib" ".SUBCKT SKA"
+check "dotted names: other copy" cat "$models_dir/Sk (.5A and Above).lib" ".SUBCKT SKB"
 check "repaired: own model"  cat "$zen" "D1 1 2 TVCQ"
 symf="$imported"
 check "zener: A C pins"      grep -A1 '{:name "DI_DZA"' "$symf" ':like "diode"'
