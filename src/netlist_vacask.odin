@@ -246,6 +246,7 @@ vacask_directives :: proc(nl: ^Netlist, s: ^Schematic, sim: ^Simulator_Def, vb: 
 			rest := strings.trim_space(t[len(f[0]):])
 			r, _ := strings.replace_all(rest, "{", "", context.temp_allocator)
 			r, _ = strings.replace_all(r, "}", "", context.temp_allocator)
+			r = lower(r) // as the expressions that use them (vacask_value)
 			append(&vb.params, tcat("parameters ", r))
 			append(&vb.param_lines, r)
 		case ".model":
@@ -555,7 +556,9 @@ vacask_value :: proc(v: string) -> string {
 	t := strings.trim_space(v)
 	if x, ok := parse_eng(t); ok && is_number_token(t) do return fmt.tprintf("%.12g", x)
 	if is_identifier(t) do return vacask_name(t)
-	if strings.has_prefix(t, "{") && strings.has_suffix(t, "}") do return t[1:len(t) - 1]
+	// an expression: lower case, as the parameters' names (SPICE's names are case-insensitive,
+	// VACASK's are not: "{D/FS}" uses ".param Fs=500k")
+	if strings.has_prefix(t, "{") && strings.has_suffix(t, "}") do return lower(t[1:len(t) - 1])
 	return t
 }
 
@@ -572,22 +575,37 @@ vacask_name :: proc(n: string) -> string {
 	return l
 }
 
-// Splits "PULSE(0 1 0 1n 1n 5u 10u) AC 1" into tokens, with function arguments grouped.
+// Splits "PULSE(0 1 0 1n 1n 5u 10u) AC 1" into tokens, with function arguments grouped. Commas
+// outside {…} are spaces ("PULSE(0,1)"); an expression "{(1-D)/Fs}" or "{max(Vin, 1)}" is one
+// token, inside a function's arguments too.
 source_tokens :: proc(v: string) -> [dynamic]string {
 	out := make([dynamic]string, context.temp_allocator)
-	t, _ := strings.replace_all(v, ",", " ", context.temp_allocator)
+	tb := transmute([]u8)strings.clone(v, context.temp_allocator)
+	brace := 0
+	for &ch in tb {
+		switch ch {
+		case '{': brace += 1
+		case '}': brace = max(brace - 1, 0)
+		case ',': if brace == 0 do ch = ' '
+		}
+	}
+	t := string(tb)
 	i := 0
 	for i < len(t) {
 		for i < len(t) && (t[i] == ' ' || t[i] == '\t') do i += 1
 		if i >= len(t) do break
 		start := i
+		if t[i] == '{' {
+			i = group_end(t, i)
+			append(&out, t[start:i])
+			continue
+		}
 		for i < len(t) && t[i] != ' ' && t[i] != '\t' && t[i] != '(' do i += 1
 		// a function: name, optional spaces, (args)
 		k := i
 		for k < len(t) && (t[k] == ' ' || t[k] == '\t') do k += 1
 		if k < len(t) && t[k] == '(' {
-			e := strings.index_byte(t[k:], ')')
-			end := k + e + 1 if e >= 0 else len(t)
+			end := group_end(t, k)
 			append(&out, tcat(strings.trim_space(t[start:i]), t[k:end]))
 			i = end
 			continue
@@ -595,6 +613,20 @@ source_tokens :: proc(v: string) -> [dynamic]string {
 		append(&out, t[start:i])
 	}
 	return out
+}
+
+// Past the bracket that closes the (…) or {…} starting at i, the groups inside it skipped.
+group_end :: proc(t: string, i: int) -> int {
+	depth := 0
+	for j in i ..< len(t) {
+		switch t[j] {
+		case '(', '{': depth += 1
+		case ')', '}':
+			depth -= 1
+			if depth == 0 do return j + 1
+		}
+	}
+	return len(t)
 }
 
 // SPICE source value → VACASK vsource/isource parameters.
@@ -606,7 +638,7 @@ vacask_source :: proc(v: string) -> (string, string) {
 		c := strings.last_index_byte(t, ')')
 		if o < 0 do return {}
 		if c < o do c = len(t)
-		return strings.fields(t[o + 1:c], context.temp_allocator)
+		return value_words(t[o + 1:c])
 	}
 	i := 0
 	for i < len(toks) {
@@ -661,6 +693,10 @@ vacask_source :: proc(v: string) -> (string, string) {
 			}
 			strings.write_string(&b, "]")
 		case is_number_token(tk):
+			fmt.sbprintf(&b, " dc=%s", vacask_value(tk))
+		case len(tk) > 2 && tk[0] == '{' && tk[len(tk) - 1] == '}':
+			// a parameter or expression ("{Vin}", "{2*Vin}"): the DC value, as the
+			// parameters .param gives
 			fmt.sbprintf(&b, " dc=%s", vacask_value(tk))
 		case:
 			return strings.to_string(b), fmt.tprintf("VACASK: cannot translate \"%s\" in the source value", tk)
@@ -883,7 +919,7 @@ vacask_subckt :: proc(nl: ^Netlist, o: ^Vacask_Out, e: ^Lib_Entry) {
 			rest := strings.trim_space(t[strings.index_byte(t, ' ') + 1:]) if strings.index_byte(t, ' ') > 0 else ""
 			r, _ := strings.replace_all(rest, "{", "", context.temp_allocator)
 			r, _ = strings.replace_all(r, "}", "", context.temp_allocator)
-			fmt.sbprintf(&body, "  parameters %s\n", r)
+			fmt.sbprintf(&body, "  parameters %s\n", lower(r))
 		case t[0] == '.':
 			append(&nl.errors, fmt.tprintf("VACASK, subcircuit %s: \"%s\" cannot be translated", e.name, t))
 		case:

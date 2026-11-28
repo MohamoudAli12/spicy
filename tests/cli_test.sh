@@ -128,6 +128,53 @@ if "$bin" --import-asc "$work/rser.asc" "$work/rser.edn" 2>&1 | grep -q "left ou
 printf '* LTspice netlist\nV1 out 0 5 Rser=1k\nR1 out 0 1k\nC1 out 0 1u Rser=10m Lser=1n\n.op\n.end\n' >"$work/rser.cir"
 check "netlist Rser: source"   "$bin" --netlist "$work/rser.cir" "RV1_rser out n_v1_1 1k"
 check "netlist Lser: capacitor" "$bin" --netlist "$work/rser.cir" "LC1_esl n_c1_1 n_c1_2 1n"
+# "µ" after a number (LTspice writes "1µ"): "u", which Xyce reads (it stopped at "1µ") and VACASK
+# in its parameters; 1k into 0.5µ + {Cx} = 1 uF is 63.2 % of 5 V (3.161 V) after 1 ms
+cat >"$work/micro.cir" <<'EOF'
+* micro
+.param Vin=5 Cx=0.5µ
+V1 a 0 PULSE(0 {Vin} 0 1n 1n 1 2)
+R1 a b 1k
+C1 b 0 0.5µ
+C2 b 0 {Cx}
+.tran 1u 1m
+.meas tran vb FIND V(b) AT=1m
+.end
+EOF
+check "µ value: xyce"          "$bin" --netlist "$work/micro.cir" --sim xyce "C1 b 0 0.5u"
+check "µ .param: xyce"         "$bin" --netlist "$work/micro.cir" --sim xyce ".param Vin=5 Cx=0.5u"
+check "µ .param: vacask"       "$bin" --netlist "$work/micro.cir" --sim vacask "parameters vin=5 cx=0.5u"
+if "$bin" --netlist "$work/micro.cir" --sim xyce 2>&1 | grep -q "µ"; then fail "µ: none left for xyce"; else pass "µ: none left for xyce"; fi
+# a parameter or expression as a source's value: VACASK's dc= (it stopped at "{Vin}"); names in
+# lower case, as VACASK's are case-sensitive and SPICE's are not
+cat >"$work/vin.cir" <<'EOF'
+* vin
+.param Vin=12
+V1 a 0 {Vin}
+R1 a 0 1k
+V2 d 0 {Vin / 2} AC 1
+R2 d 0 1k
+I1 0 e {max(Vin, 20) * 1m}
+R3 e 0 1k
+.op
+.end
+EOF
+check "vacask {Vin} source"    "$bin" --netlist "$work/vin.cir" --sim vacask "v1 (a 0) vsource dc=vin"
+check "vacask {expr} AC"       "$bin" --netlist "$work/vin.cir" --sim vacask "v2 (d 0) vsource dc=vin / 2 mag=1"
+check "vacask {expr} commas"   "$bin" --netlist "$work/vin.cir" --sim vacask "isource dc=max(vin, 20) * 1m"
+# LTspice's PULSE with expressions: "(1-D)" does not end the PULSE( … ), "FS" is .param Fs; on
+# 0.6 us after 0, for 1.35 us, every 2 us
+cat >"$work/pw.cir" <<'EOF'
+* pw
+.param D=0.3 Fs=500k dead_time=50n
+V3 a 0 PULSE(0 5 {D/FS} 1n 1n {(1-D)/Fs-dead_time} {1/Fs})
+R1 a 0 1k
+.tran 10n 4u
+.meas tran on FIND V(a) AT=1.2u
+.meas tran off FIND V(a) AT=2.3u
+.end
+EOF
+check "vacask PULSE expressions" "$bin" --netlist "$work/pw.cir" --sim vacask "delay=d/fs rise=1e-09 fall=1e-09 width=(1-d)/fs-dead_time period=1/fs"
 
 # a simulator's program set like Simulate › Simulators… does: only that path changes
 mkdir -p "$work/pcfg"
@@ -650,6 +697,7 @@ EOF
 	# LTspice's Rser= etc.: 5 V through 1k into (1k || 8040 + 1k) || 1 MOhm: 3.267 V, 1.729 V
 	check "asc Rser run"         "$bin" --text --run "$work/rser.asc" "v(out)                       3.267 V"
 	check "asc Rser run (mid)"   "$bin" --text --run "$work/rser.asc" "v(mid)                       1.729 V"
+	check "µ run"                "$bin" --text --run "$work/micro.cir" "measure vb = 3.161 V"
 	check "no pspice mode"     "$bin" --netlist "$work/switch.edn" "* spicy"
 	if "$bin" --netlist "$work/switch.edn" 2>&1 | grep -q ngbehavior; then fail "plain netlist without pspice mode"; else pass "plain netlist without pspice mode"; fi
 	"$bin" --text --run "$work/opamp_inverting.edn" --csv "$work/o.csv" >/dev/null 2>&1
@@ -662,6 +710,7 @@ if command -v Xyce >/dev/null 2>&1; then
 	check "xyce device current" "$bin" --text --run "$work/rc_lowpass.edn" --sim xyce "I(R1)"
 	check "xyce step currents" "$bin" --text --run "$work/step.edn" --sim xyce "I(R1)"
 	check "xyce asc Rser run"   "$bin" --text --run "$work/rser.asc" --sim xyce "  OUT                          3.267 V"
+	check "xyce µ run"          "$bin" --text --run "$work/micro.cir" --sim xyce "measure vb = 3.161 V"
 else
 	echo "skip Xyce runs (Xyce is not on the PATH)"
 fi
@@ -673,6 +722,11 @@ if command -v vacask >/dev/null 2>&1; then
 	check "vacask VDMOS run"     "$bin" --text --run "$work/ltvk.edn" --sim vacask "  b                            4.081 V"
 	check "vacask BJT run"       "$bin" --text --run "$work/ltvk.edn" --sim vacask "  e                            7.294 V"
 	check "vacask asc Rser run"  "$bin" --text --run "$work/rser.asc" --sim vacask "  out                          3.267 V"
+	check "vacask µ run"         "$bin" --text --run "$work/micro.cir" --sim vacask "measure vb = 3.161 V"
+	check "vacask {Vin} run"     "$bin" --text --run "$work/vin.cir" --sim vacask "  a                            12 V"
+	check "vacask {expr} run"    "$bin" --text --run "$work/vin.cir" --sim vacask "  e                            20 V"
+	check "vacask PULSE expr on"  "$bin" --text --run "$work/pw.cir" --sim vacask "measure on = 5 V"
+	check "vacask PULSE expr off" "$bin" --text --run "$work/pw.cir" --sim vacask "measure off = 0 V"
 else
 	echo "skip VACASK runs (vacask is not on the PATH)"
 fi

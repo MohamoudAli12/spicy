@@ -334,8 +334,7 @@ LT_INST_MISSING := []Lt_Inst_Param {
 	{'V', "cpar", "capacitance across a voltage source"},
 }
 
-// The words of a part's value: spaces inside "…" and (…) do not split.
-@(private = "file")
+// The words of a part's value: spaces inside "…", (…) and {…} do not split.
 value_words :: proc(v: string) -> []string {
 	out := make([dynamic]string, context.temp_allocator)
 	depth, quoted, start := 0, false, -1
@@ -347,8 +346,8 @@ value_words :: proc(v: string) -> []string {
 		}
 		switch ch {
 		case '"': quoted = true
-		case '(': depth += 1
-		case ')': depth = max(depth - 1, 0)
+		case '(', '{': depth += 1
+		case ')', '}': depth = max(depth - 1, 0)
 		case ' ', '\t':
 			if depth == 0 {
 				if start >= 0 do append(&out, v[start:i])

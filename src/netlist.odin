@@ -63,12 +63,28 @@ netlist_build :: proc(s: ^Schematic, sim: ^Simulator_Def, title: string, base_di
 		}
 		lt_check_netlist(&nl, cards, sim)
 	}
+	nl.text = micro_to_u(nl.text)
 	check_models(&nl, s, sim)
 	if len(s.comps) == 0 do append(&nl.errors, "the schematic has no parts")
 	ground := false
 	for n in nl.nets.names do if n == "0" do ground = true
 	if !ground && len(s.comps) > 0 do append(&nl.errors, "there is no ground (press G to place one)")
 	return nl
+}
+
+// "µ" (as LTspice writes it, "1µ") and Greek "μ" after a number: "u", which every simulator
+// reads (Xyce stops at "1µ", VACASK at "2µ" in its parameters). In words and paths they stay.
+micro_to_u :: proc(text: string) -> string {
+	if !strings.contains(text, "µ") && !strings.contains(text, "μ") do return text
+	b := strings.builder_make(context.temp_allocator)
+	prev: rune = 0
+	for r in text {
+		if (r == 'µ' || r == 'μ') && ((prev >= '0' && prev <= '9') || prev == '.') {
+			strings.write_byte(&b, 'u')
+		} else do strings.write_rune(&b, r)
+		prev = r
+	}
+	return strings.to_string(b)
 }
 
 // Directive blocks can be limited to one simulator or dialect with a first line such as
