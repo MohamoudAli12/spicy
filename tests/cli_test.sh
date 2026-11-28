@@ -512,6 +512,31 @@ if "$bin" --check "$work/ltideal.edn" 2>&1 | grep -q "ideal diode"; then fail "n
 ltsch "$work/ltvk.edn" 'V1 a 0 10\nV2 g 0 8\nM1 a g b IRFX\nQ1 a g e QX\nR2 e 0 1k\n.model IRFX VDMOS(Vto=4 Kp=6 mfg=Vishay Vds=100 Ron=160m Qg=26n)\n.model QX NPN(Is=1e-14 Bf=200 Vceo=40 Icrating=200m mfg=NXP)\n.op'
 check "vacask: VDMOS ratings left out" "$bin" --netlist "$work/ltvk.edn" --sim vacask "// IRFX: mfg, vds, ron, qg left out (not parameters of VACASK's sp_vdmos)"
 check "vacask: VDMOS kept"     "$bin" --netlist "$work/ltvk.edn" --sim vacask "model irfx sp_vdmos type=1 vto=4 kp=6"
+# a MOSFET symbol (its body tied to the source: "{S} {S}") with a VDMOS model: three nodes, d g s.
+# VACASK's fourth node is the thermal one, held at 0 V: the source shorted to ground, a
+# singular matrix ("zero pivot @ node 'v1:flow(br)'"). A P-channel soft start.
+cat >"$work/softstart.edn" <<'EOF'
+{:spicy-schematic 1
+ :components [{:symbol "pmos" :ref "M1" :value "IRF9540" :at [-96 16] :rot 270}
+              {:symbol "res" :ref "R1" :value "200k" :at [-288 96]}
+              {:symbol "res" :ref "R2" :value "150k" :at [-288 -32]}
+              {:symbol "cap" :ref "C1" :value "100n" :at [-192 -16]}
+              {:symbol "cap" :ref "C2" :value "10n" :at [64 -16]}
+              {:symbol "voltage" :ref "V1" :value "24" :at [-464 16]}
+              {:symbol "res" :ref "R3" :value "48" :at [144 32]}]
+ :wires [[-112 224 -464 224] [-464 224 -464 112] [-464 32 -464 -32] [-464 -32 -96 -32]
+         [0 -32 80 -32] [80 -32 80 -16] [-272 224 -272 192] [-272 112 -272 64]
+         [-272 -16 -272 -32] [-272 80 -176 80] [-176 48 -176 80] [-176 -16 -176 -32]
+         [-176 80 -80 80] [-80 80 -80 16] [-80 80 80 80] [80 48 80 80]
+         [80 -32 192 -32] [160 -32 160 48] [160 128 160 224] [160 224 -112 224]]
+ :flags [{:name "0" :at [-112 224]} {:name "out" :at [192 -32]}]
+ :texts [{:at [320 80] :text ".tran 10m startup" :directive true}]}
+EOF
+check "VDMOS symbol: 3 nodes"         "$bin" --netlist "$work/softstart.edn" "M1 out N002 N001 IRF9540"
+check "vacask VDMOS symbol: 3 nodes"  "$bin" --netlist "$work/softstart.edn" --sim vacask "m1 (m1_d m1_g m1_s) irf9540"
+# a plain PMOS model keeps its four nodes (the body tied to the source)
+sed 's/:value "IRF9540"/:value "PX"/; s/:text ".tran 10m startup"/:text ".model PX PMOS(Vto=-2 Kp=1)\\n.tran 10m"/' "$work/softstart.edn" >"$work/pmos4.edn"
+check "MOSFET symbol: body node kept" "$bin" --netlist "$work/pmos4.edn" "M1 out N002 N001 N001 PX"
 check "vacask: BJT ratings left out" "$bin" --netlist "$work/ltvk.edn" --sim vacask "// QX: vceo, icrating, mfg left out (not parameters of VACASK's sp_bjt)"
 "$bin" --import-model "$work/faulty.lib" >/dev/null 2>&1; [ $? = 1 ] && pass "import stops on faults" || fail "import stops on faults"
 check "import says how"      "$bin" --import-model "$work/faulty.lib" "import it again with --repair"
@@ -831,6 +856,8 @@ if command -v vacask >/dev/null 2>&1; then
 	check "vacask step without results" "$bin" --text --run "$work/badstep.edn" --sim vacask "[rv=1k*]: no results"
 	# as ngspice: the source follower's v(b) = 4.081 V, the emitter follower's v(e) = 7.294 V
 	check "vacask VDMOS run"     "$bin" --text --run "$work/ltvk.edn" --sim vacask "  b                            4.081 V"
+	# as ngspice: the soft start ends at 23.92 V
+	check "vacask VDMOS symbol run" "$bin" --text --run "$work/softstart.edn" --sim vacask "  out                          23.92 V"
 	check "vacask BJT run"       "$bin" --text --run "$work/ltvk.edn" --sim vacask "  e                            7.294 V"
 	check "vacask asc Rser run"  "$bin" --text --run "$work/rser.asc" --sim vacask "  out                          3.267 V"
 	check "vacask µ run"         "$bin" --text --run "$work/micro.cir" --sim vacask "measure vb = 3.161 V"

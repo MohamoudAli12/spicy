@@ -116,6 +116,17 @@ directive_lines :: proc(s: ^Schematic, sim: ^Simulator_Def) -> []string {
 }
 
 fill_template :: proc(nl: ^Netlist, tmpl: string, c: ^Comp, sym: ^Symbol, pin_nodes: []string, vacask: bool) -> string {
+	tmpl := tmpl
+	// a VDMOS (power MOSFET) has three nodes, d g s: the body is inside it. A fourth is its
+	// thermal node, which VACASK holds at 0 V when the thermal model is off (the source, tied
+	// there, shorted to ground: a singular matrix)
+	if strings.contains(tmpl, "{S} {S}") {
+		name := strings.trim_space(c.value)
+		if sp := strings.index_any(name, " \t"); sp >= 0 do name = name[:sp]
+		if e := model_lookup(name, nl.local); e != nil && upper(e.model_type) == "VDMOS" {
+			tmpl, _ = strings.replace(tmpl, "{S} {S}", "{S}", 1, context.temp_allocator)
+		}
+	}
 	b := strings.builder_make(context.temp_allocator)
 	i := 0
 	for i < len(tmpl) {
