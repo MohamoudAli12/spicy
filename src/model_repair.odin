@@ -19,6 +19,7 @@ Repair_Kind :: enum u8 {
 	Name_From_Src,     // "*SRC=BZT52C20T;DI_BZT52C20T…" over ".SUBCKT DI_BZT52C20" (a copy's name)
 	Local_Model_Name,  // "D1 1 2 SMCJ26A" in a subcircuit whose only model is SMCJ26AQ
 	Misspelt_Subckt,   // ".SUBCKET X 1 2"
+	Port_Assignments,  // ".SUBCKT DMG1012T D=10 G=20 S=30": the ports written as parameters
 	Label_Line,        // "Inc. BJTs": text outside .model / .subckt
 	Comment_In_Card,   // a comment line between the "+" lines of a card
 	Plus_In_Line,      // "RC=0.015  +CJE=250E-12": two lines run together
@@ -59,6 +60,7 @@ repair_kind_text :: proc(k: Repair_Kind) -> string {
 	case .Comment_Semicolon: return "comment lines that start with \";\" (made \"*\" comments)"
 	case .Inline_Semicolon: return "\";\" comments inside model cards (removed: Xyce and VACASK stop at them)"
 	case .Misspelt_Subckt: return ".SUBCKT misspelt (\".SUBCKET\" made \".SUBCKT\")"
+	case .Port_Assignments: return "subcircuits whose ports are written \"D=10 G=20 S=30\" (made ports 10 20 30, named D G S: SPICE reads parameters and no ports)"
 	case .Non_Ascii: return "non-ASCII characters (\"µ\" made \"u\": SPICE reads \"100µ\" as 100; non-breaking spaces made spaces)"
 	case .Run_Together: return ".SUBCKT or .MODEL run onto the end of another line (put on its own line)"
 	case .Glued_Ends: return ".ENDS on the same line as a card (put on its own line)"
@@ -205,6 +207,7 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 	L := repair_split(text, &rep)
 	L = repair_lines(L[:], &rep)
 	L = repair_subckt_ends(L[:], &rep)
+	L = repair_port_assignments(L[:], &rep)
 	L = repair_models_after_ends(L[:], &rep)
 	L = repair_model_cards(L[:], &rep)
 	blocks, drop := repair_blocks(L[:], &rep)
@@ -412,6 +415,77 @@ repair_subckt_ends :: proc(L: []Rline, rep: ^Repair_Report) -> [dynamic]Rline {
 		if is_body_text(t) do label(rep, &out, L[i])
 		else do append(&out, L[i])
 		i += 1
+	}
+	return out
+}
+
+// Stage 2a: ".SUBCKT DMG1012T D=10 G=20 S=30", the ports written as parameters with their
+// node as the value (Diodes' MOSFET table): to SPICE a subcircuit with no ports and three
+// parameters, which its body never uses. Repaired only when that is what it is: every word
+// after the name is name=number, every number a node of the body, no name in an expression.
+// The ports are then the numbers, and the names the terminals ("* TERMINALS: D G S", added
+// unless a comment of the subcircuit names them so).
+@(private = "file")
+repair_port_assignments :: proc(L: []Rline, rep: ^Repair_Report) -> [dynamic]Rline {
+	out := make([dynamic]Rline)
+	for i := 0; i < len(L); i += 1 {
+		append(&out, L[i])
+		f := strings.fields(L[i].text)
+		if len(f) < 3 || lower(f[0]) != ".subckt" do continue
+		names := make([dynamic]string)
+		nodes := make([dynamic]string)
+		for w in f[2:] {
+			eq := strings.index_byte(w, '=')
+			if eq <= 0 || !is_identifier(w[:eq]) do break
+			digits := eq + 1 < len(w)
+			for c in w[eq + 1:] do if c < '0' || c > '9' do digits = false
+			if !digits do break
+			append(&names, w[:eq])
+			append(&nodes, w[eq + 1:])
+		}
+		if len(names) != len(f) - 2 do continue
+		// the body: its nodes, and whether a comment names these terminals already
+		e := i + 1
+		for e < len(L) && !strings.has_prefix(lower(L[e].text), ".ends") do e += 1
+		used := make(map[string]bool)
+		has_terminals := false
+		in_expr := false
+		for l in L[i + 1:e] {
+			t := l.text
+			if strings.has_prefix(t, "*") {
+				// "* TERMINALS: D G S", "*  TERMINALS : D  G  S", "* pins: D G S"
+				w := lower(strings.trim_left(t, "*; \t"))
+				for kw in ([]string{"terminals", "pins"}) do if strings.has_prefix(w, kw) {
+					got := strings.fields(strings.trim_left(w[len(kw):], " \t:-"))
+					same := len(got) == len(names)
+					if same do for g, k in got do if !strings.equal_fold(g, names[k]) do same = false
+					if same do has_terminals = true
+				}
+				continue
+			}
+			for w in strings.fields(replace_parens(t)) do used[w] = true
+			// the words of the {…} expressions
+			for k := 0; k < len(t); k += 1 {
+				if t[k] != '{' do continue
+				close := strings.index_byte(t[k:], '}')
+				if close < 0 do break
+				expr := t[k + 1:k + close]
+				for q := 0; q < len(expr); {
+					if !is_ident_start(expr[q]) {q += 1; continue}
+					r := q
+					for r < len(expr) && is_ident_char(expr[r]) do r += 1
+					for n in names do if strings.equal_fold(expr[q:r], n) do in_expr = true
+					q = r
+				}
+				k += close
+			}
+		}
+		all_used := true
+		for n in nodes do if !used[n] do all_used = false
+		if !all_used || in_expr do continue
+		add_item(rep, .Port_Assignments, L[i].n, f[1], strings.join(f[2:], " "))
+		out[len(out) - 1].text = tcat(f[0], " ", f[1], " ", strings.join(nodes[:], " "))
+		if !has_terminals do append(&out, Rline{tcat("* TERMINALS: ", strings.join(names[:], " ")), L[i].n})
 	}
 	return out
 }

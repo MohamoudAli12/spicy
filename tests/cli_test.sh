@@ -293,6 +293,16 @@ check "import: ; comment line" "$bin" --import-model "$work/semi.lib" --as-is "s
 printf '.SUBCKT NF 1 2 3\nM1 1 2 3 5 5\nR1 5 3 1\n.ENDS\n.MODEL 5 NMOS(VTO=1)\n' > "$work/numfet.lib"
 "$bin" --import-model "$work/numfet.lib" --repair >/dev/null 2>&1
 check "repaired: M line model" grep "^M1" "$models_dir/numfet.lib" "M1 1 2 3 5 M5"
+# ports written as parameters ("D=10 G=20 S=30", Diodes' MOSFET table): the numbers are the
+# ports, the names the terminals; a real parameter (used in the body) is left as it is
+printf '.SUBCKT PAF D=10 G=20 S=30\nM1 10 20 30 30 NM\n.MODEL NM NMOS(VTO=1)\n.ENDS\n' > "$work/paf.lib"
+check "check: ports as parameters" "$bin" --check-model "$work/paf.lib" 'ports are written "D=10 G=20 S=30"'
+"$bin" --import-model "$work/paf.lib" --repair >/dev/null 2>&1
+check "repaired: ports"        grep -A1 "^\.SUBCKT PAF" "$models_dir/paf.lib" "* TERMINALS: D G S"
+check "repaired: port line"    grep "^\.SUBCKT PAF" "$models_dir/paf.lib" ".SUBCKT PAF 10 20 30"
+check "ports as parameters: symbol" grep -A1 '{:name "PAF"' "$imported" ':like "nmos"'
+printf '.SUBCKT PRR a b R=10\nR1 a b {R}\n.ENDS\n' > "$work/prr.lib"
+check "real parameter kept"    "$bin" --check-model "$work/prr.lib" "no problems found"
 check "repaired: own model"  cat "$zen" "D1 1 2 TVCQ"
 symf="$imported"
 check "zener: A C pins"      grep -A1 '{:name "DI_DZA"' "$symf" ':like "diode"'
