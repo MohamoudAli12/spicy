@@ -286,9 +286,20 @@ Window_Input :: struct {
 
 win_input: ^Window_Input
 
-test_click: [2]f32
-test_click_frame := -2 // -2 off, -1 waiting for the run, then counting frames
-test_click_right := false // rclick:x,y – one right-click instead of the double-click
+// test hooks (SPICY_ACTIONS click:x,y, dblclick:x,y, rclick:x,y, type:text): played in turn
+// after the run, through the same input as the mouse and keyboard
+Test_Event_Kind :: enum u8 {Click, Double, Right, Type}
+Test_Event :: struct {
+	kind: Test_Event_Kind,
+	pos:  [2]f32, // fractions of the window
+	text: string,
+}
+TEST_EVENT_FRAMES :: 6
+test_events: [dynamic]Test_Event
+test_ev_frame := -2 // -2 off, -1 waiting for the run, then the frame of the first event
+test_mouse: Maybe([2]f32) // after a click the mouse stays there (the screenshot shows its hover)
+
+test_events_pending :: proc() -> bool {return test_ev_frame != -2 && len(test_events) > 0}
 
 key_pressed :: proc(k: rl.KeyboardKey) -> bool {
 	if win_input != nil do return int(k) >= 0 && int(k) < 512 && win_input.khit[int(k)]
@@ -396,25 +407,6 @@ ui_begin_frame :: proc() {
 		ui.last_click = ui.time
 		ui.last_click_pos = ui.mouse
 	}
-	// test hook (SPICY_ACTIONS dblclick:x,y): the mouse stays there, the 2nd frame is a double-click
-	// (rclick:x,y: a right-click)
-	if test_click_frame >= 0 && win_input == nil {
-		ui.mouse = {test_click.x * screen_w(), test_click.y * screen_h()}
-		ui.delta = {}
-		if test_click_right {
-			switch test_click_frame {
-			case 0: ui.pressed[1] = true; ui.down[1] = true
-			case 1: ui.released[1] = true
-			}
-		} else {
-			switch test_click_frame {
-			case 0, 2: ui.pressed[0] = true; ui.down[0] = true
-			case 1, 3: ui.released[0] = true
-			}
-			ui.double = test_click_frame == 2
-		}
-		test_click_frame += 1
-	}
 	ui.ctrl = key_down(.LEFT_CONTROL) || key_down(.RIGHT_CONTROL) || key_down(.LEFT_SUPER) || key_down(.RIGHT_SUPER)
 	ui.shift = key_down(.LEFT_SHIFT) || key_down(.RIGHT_SHIFT)
 	ui.alt = key_down(.LEFT_ALT) || key_down(.RIGHT_ALT)
@@ -425,11 +417,47 @@ ui_begin_frame :: proc() {
 		if c == 0 do break
 		append(&ui.chars, c)
 	}
+	if win_input == nil do test_event_frame()
 	ui.block = ui.popup_id != 0 && (r_contains(ui.popup_rect, ui.mouse) || (ui.sub_open >= 0 && r_contains(ui.sub_rect, ui.mouse)))
 	ui.hot = 0
 	ui.cursor = .DEFAULT
 	if !ui.down[0] && !ui.released[0] do ui.active = 0
 	ui.popup_open_frame = false
+}
+
+// One frame of the test event being played: a click is pressed and released (a double-click
+// twice), text is typed on its first frame.
+@(private = "file")
+test_event_frame :: proc() {
+	if test_ev_frame >= 0 && len(test_events) > 0 {
+		ev := test_events[0]
+		f := test_ev_frame
+		switch ev.kind {
+		case .Type:
+			if f == 0 do for c in ev.text do append(&ui.chars, c)
+		case .Click, .Double, .Right:
+			test_mouse = ev.pos
+			b := 1 if ev.kind == .Right else 0
+			n := 2 if ev.kind == .Double else 1
+			if f < 2 * n {
+				if f % 2 == 0 {
+					ui.pressed[b] = true
+					ui.down[b] = true
+				} else do ui.released[b] = true
+			}
+			if b == 0 do ui.double = ev.kind == .Double && f == 2
+		}
+		test_ev_frame += 1
+		if test_ev_frame >= TEST_EVENT_FRAMES {
+			ordered_remove(&test_events, 0)
+			test_ev_frame = 0
+		}
+	}
+	if m, ok := test_mouse.?; ok {
+		ui.mouse = {m.x * screen_w(), m.y * screen_h()}
+		ui.delta = {}
+		if ui.pressed[0] || ui.pressed[1] do ui.press_pos = ui.mouse
+	}
 }
 
 ui_end_frame :: proc() {

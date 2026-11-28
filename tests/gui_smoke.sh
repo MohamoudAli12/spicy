@@ -54,6 +54,23 @@ if ! grep -q "placing zener with the model 1N4733" "$work/cfg/state/spicy.log"; 
 	grep -i "placing\|error" "$work/cfg/state/spicy.log" | tail -5
 	exit 1
 fi
+# typed into the picker's search as it opens: the Zener tile with the one model it matches, the
+# table with that search, and a double-click on its row places it
+run search "place/component;type:1N4742;click:0.307,0.33;dblclick:0.3,0.254"
+shots="$shots search"
+if ! grep -q "placing zener with the model 1N4742" "$work/cfg/state/spicy.log"; then
+	echo "FAIL: typing 1N4742 into the parts search did not lead to a 1N4742 to place"
+	grep -i "placing\|error" "$work/cfg/state/spicy.log" | tail -5
+	exit 1
+fi
+# the model table's editor: a rating typed in and saved goes to model-info.edn
+run save "place/component;type:1N4742;click:0.307,0.33;click:0.3,0.254;click:0.379,0.767;type:0.2;click:0.739,0.799"
+shots="$shots save"
+if ! grep -qF '{"1n4742" {:I 0.2}}' "$work/cfg/data/model-info.edn" 2>/dev/null; then
+	echo "FAIL: IF = 0.2 typed in the model table's editor and saved is not in model-info.edn"
+	cat "$work/cfg/data/model-info.edn" 2>&1 | tail -5
+	exit 1
+fi
 # menu items picked as a click picks them: an action, a submenu item (saved in settings.edn)
 run menus "menu:View/Move the waveforms;menu:View/UI scale/150 %"
 shots="$shots menus"

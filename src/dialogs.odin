@@ -71,8 +71,8 @@ dialog_open :: proc(k: Dialog_Kind) {
 		set_str(&dl.name, nm)
 		focus_field("dlg.name")
 	case .Part_Picker:
-		set_str(&dl.search, "")
-		focus_field("dlg.search")
+		// the picker's own search (the last one, selected: typing replaces it)
+		focus_field("parts.search")
 	case .Label_Name:
 		set_str(&dl.name, "")
 		dl.idx = -1

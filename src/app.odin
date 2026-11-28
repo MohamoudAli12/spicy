@@ -1265,15 +1265,21 @@ gui_main :: proc(files: []string) {
 				case strings.has_prefix(a, "models:"): // models:Diodes/Zener: a kind's tile in the parts picker clicked
 					fk := strings.split_n(a[7:], "/", 2, context.temp_allocator)
 					if len(fk) == 2 do model_table_open_place(fk[0], fk[1], "")
-				case strings.has_prefix(a, "dblclick:"), strings.has_prefix(a, "rclick:"): // a double- or right-click at x,y (fractions of the window) after the run
-					test_click_right = strings.has_prefix(a, "rclick:")
+				case strings.has_prefix(a, "click:"), strings.has_prefix(a, "dblclick:"), strings.has_prefix(a, "rclick:"):
+					// a click, double- or right-click at x,y (fractions of the window) after the run
+					kind := Test_Event_Kind.Click
+					if strings.has_prefix(a, "dblclick:") do kind = .Double
+					if strings.has_prefix(a, "rclick:") do kind = .Right
 					xy := strings.split(a[strings.index_byte(a, ':') + 1:], ",", context.temp_allocator)
 					if len(xy) == 2 {
 						fx, _ := parse_eng(xy[0])
 						fy, _ := parse_eng(xy[1])
-						test_click = {f32(fx), f32(fy)}
-						test_click_frame = -1
+						append(&test_events, Test_Event{kind = kind, pos = {f32(fx), f32(fy)}})
+						test_ev_frame = -1
 					}
+				case strings.has_prefix(a, "type:"): // type:1N4742: typed into the focused field, in turn with the clicks
+					append(&test_events, Test_Event{kind = .Type, text = strings.clone(a[5:])})
+					test_ev_frame = -1
 				case strings.has_prefix(a, "menu:"): // menu:View/UI scale/150 %: picks a menu item as a click does
 					test_menu_pick(a[5:])
 				case strings.has_prefix(a, "in-waves:"): // run inside the waveform window
@@ -1285,7 +1291,8 @@ gui_main :: proc(files: []string) {
 		busy := false
 		for d in app.docs do if d.run.state == .Running do busy = true
 		if busy && frames > 20 do frames = 20
-		if test_click_frame == -1 && frames == 22 do test_click_frame = 0
+		if test_ev_frame == -1 && frames == 22 do test_ev_frame = 0
+		if test_events_pending() && frames > 25 do frames = 25 // the screenshot after the last event
 		if len(shot) > 0 && frames == 29 do for p in popouts {
 			p.shot = strings.concatenate({strings.trim_suffix(shot, ".png"), "-waves.png" if p.kind == .Waves else "-parts.png"})
 		}
