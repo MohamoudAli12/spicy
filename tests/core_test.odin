@@ -439,3 +439,24 @@ symbol_defs_order :: proc(t: ^testing.T) {
 		}
 	}
 }
+
+// A schematic's saved copies against the library here: which differ, and switching one to the
+// library's version takes the cards it uses whose copies differ too, and nothing else.
+@(test)
+embedded_vs_library :: proc(t: ^testing.T) {
+	setup()
+	lib := ".SUBCKT TSW a b\nD1 a b DX\nR1 a b RY\n.ENDS\n.MODEL DX D(IS=2n)\n.MODEL DOTHER D(IS=5n)\n"
+	C.parse_lib_into(&C.model_lib, lib, .Library, "new.lib")
+	s: C.Schematic
+	append(&s.embedded, C.Embedded_Model{strings.clone("tsw"), strings.clone("new.lib"), strings.clone(".SUBCKT TSW a b\nD1 a b DX\n.ENDS")})
+	append(&s.embedded, C.Embedded_Model{strings.clone("dx"), strings.clone("new.lib"), strings.clone(".MODEL DX D(IS=1n)")})
+	append(&s.embedded, C.Embedded_Model{strings.clone("dother"), strings.clone("new.lib"), strings.clone(".MODEL DOTHER D(IS=1n)")})
+	append(&s.embedded, C.Embedded_Model{strings.clone("dsame"), strings.clone("mine.lib"), strings.clone(".MODEL DSAME D(IS=3n)")})
+	defer C.embedded_free(&s)
+	differing := C.embedded_differing(&s, C.sch_models(&s, nil, ""))
+	testing.expectf(t, len(differing) == 3 && differing[0] == "tsw" && differing[1] == "dx" && differing[2] == "dother", "differing = %v", differing)
+	switched := C.embedded_use_library(&s, "TSW")
+	testing.expectf(t, len(switched) == 2 && switched[0] == "tsw" && switched[1] == "dx", "switched = %v", switched)
+	// left: dother (another model, not used by TSW) and dsame (not in the library)
+	testing.expectf(t, len(s.embedded) == 2 && s.embedded[0].name == "dother" && s.embedded[1].name == "dsame", "left = %v", s.embedded)
+}

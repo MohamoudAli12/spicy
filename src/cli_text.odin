@@ -52,13 +52,25 @@ cli_import_model :: proc(args: []string) {
 	for n in res.models do fmt.println("model   ", n)
 }
 
-// --embed <file.edn>: refreshes the copies of models and symbols saved in a schematic, as
-// saving it does.
+// --embed <file.edn> [--update]: refreshes the copies of models and symbols saved in a
+// schematic, as saving it does. A copy whose library here has another version is kept and
+// named; with --update the library's version replaces it.
 cli_embed :: proc(args: []string) {
-	if len(args) < 2 do cli_usage("usage: spicy --embed <file.edn>")
+	if len(args) < 2 do cli_usage("usage: spicy --embed <file.edn> [--update]")
+	update := false
+	for a in args[2:] {
+		if a == "--update" do update = true
+		else do cli_usage(tcat("usage: spicy --embed <file.edn> [--update]   (unknown option ", a, ")"))
+	}
 	p := abs_path(args[1])
 	sch, _, err := load_schematic_file(p)
 	if len(err) > 0 do cli_fail(EXIT_FILE, "parse", err)
+	differing := embedded_differing(&sch, sch_models(&sch, cli_sim(&sch, args), dir_of(p)))
+	if update {
+		for n in differing do for u in embedded_use_library(&sch, n) do fmt.printfln("updated  %s (the library's version)", u)
+	} else {
+		for n in differing do fmt.printfln("differs  %s: the library here has another version (--update uses it)", n)
+	}
 	sch_embed(&sch, dir_of(p))
 	if !write_text(p, sch_to_edn(&sch)) do cli_fail(EXIT_FILE, "write", tcat("cannot write ", p))
 	for e in sch.embedded do fmt.printfln("model    %s (from %s)", e.name, e.from)

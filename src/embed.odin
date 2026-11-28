@@ -138,14 +138,49 @@ drop_embedded :: proc(s: ^Schematic, lib_file: string) -> int {
 		parse_lib_into(&entries, text, .Library, lib_file)
 	}
 	n := 0
-	for i := len(s.embedded) - 1; i >= 0; i -= 1 {
-		hit := false
-		for &e in entries do if e.name == s.embedded[i].name do hit = true
-		if !hit do continue
-		e := s.embedded[i]
+	for &e in entries do if embedded_drop(s, e.name) do n += 1
+	return n
+}
+
+// Forgets the schematic's copy of a model or subcircuit (name in lower case).
+embedded_drop :: proc(s: ^Schematic, name: string) -> bool {
+	for e, i in s.embedded do if e.name == name {
 		delete(e.name); delete(e.from); delete(e.text)
 		ordered_remove(&s.embedded, i)
-		n += 1
+		return true
 	}
-	return n
+	return false
+}
+
+// The copies the schematic simulates with whose library here has another version (in the
+// order they are saved). local: sch_models' entries.
+embedded_differing :: proc(s: ^Schematic, local: []Lib_Entry) -> []string {
+	out := make([dynamic]string, context.temp_allocator)
+	for e in s.embedded do if _, differs := model_source(e.name, local); differs do append(&out, e.name)
+	return out[:]
+}
+
+// Uses the library's version of a model or subcircuit in place of the schematic's copy, and
+// of the cards that version uses whose copies differ too (a subcircuit and the models it
+// uses from outside it: never old and new together). Gives the names switched; the next
+// save (sch_embed) copies the library's versions.
+embedded_use_library :: proc(s: ^Schematic, name: string) -> []string {
+	switched := make([dynamic]string, context.temp_allocator)
+	queue := make([dynamic]string, context.temp_allocator)
+	append(&queue, lower(name))
+	seen := make(map[string]bool, 16, context.temp_allocator)
+	for len(queue) > 0 {
+		n := pop(&queue)
+		if seen[n] do continue
+		seen[n] = true
+		l := lib_find(n)
+		if l == nil do continue
+		for e in s.embedded do if e.name == n && strings.trim_space(e.text) != strings.trim_space(l.text) {
+			append(&switched, strings.clone(n, context.temp_allocator))
+			embedded_drop(s, n)
+			break
+		}
+		for w in strings.fields(replace_parens(l.text), context.temp_allocator) do append(&queue, lower(w))
+	}
+	return switched[:]
 }

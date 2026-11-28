@@ -24,7 +24,8 @@ usage:
                                            file with faults is only imported with --repair (the copy
                                            repaired, the file unchanged) or --as-is
   spicy --check-model <file>               report a model file's faults and what --repair would do
-  spicy --embed <file.edn>                 save copies of the models and symbols it uses in it
+  spicy --embed <file.edn> [--update]      save copies of the models and symbols it uses in it
+                                           (--update: the library's versions of those that differ)
   spicy --set-program <simulator> <path>   the program a simulator runs (saved in settings.edn)
   spicy --paths                            where settings, symbols, models and logs live
   spicy --diagnostics                      versions, paths and environment (for bug reports)

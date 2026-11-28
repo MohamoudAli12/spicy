@@ -395,6 +395,12 @@ check "embedded copy wins"   env SPICY_CONFIG_DIR="$work/othercfg" "$bin" --netl
 env SPICY_CONFIG_DIR="$work/othercfg" "$bin" --embed "$work/other/fet.edn" >/dev/null 2>&1
 if grep -q 'KP=999u' "$work/other/fet.edn"; then fail "copy kept on save"; else pass "copy kept on save"; fi
 check "copy kept, netlist"   env SPICY_CONFIG_DIR="$work/othercfg" "$bin" --netlist "$work/other/fet.edn" "KP=50u"
+# ... and is told it differs, and can choose the library's version
+check "embed: differs"       env SPICY_CONFIG_DIR="$work/othercfg" "$bin" --embed "$work/other/fet.edn" "differs  tfet: the library here has another version"
+check "embed --update"       env SPICY_CONFIG_DIR="$work/othercfg" "$bin" --embed "$work/other/fet.edn" --update "updated  tfet (the library's version)"
+check "updated copy, netlist" env SPICY_CONFIG_DIR="$work/othercfg" "$bin" --netlist "$work/other/fet.edn" "KP=999u"
+if env SPICY_CONFIG_DIR="$work/othercfg" "$bin" --embed "$work/other/fet.edn" 2>&1 | grep -q "differs"; then fail "updated: no longer differs"; else pass "updated: no longer differs"; fi
+check "embed: unknown option" "$bin" --embed "$work/fet.edn" --updat "unknown option --updat"
 # spicy's own models are saved too
 cp "$work/rc_lowpass.edn" "$work/rc_shared.edn"
 check "built-in model embedded" "$bin" --embed "$work/rc_shared.edn" "(from spicy built-in)"

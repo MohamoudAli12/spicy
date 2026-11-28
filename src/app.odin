@@ -243,8 +243,22 @@ open_file :: proc(path: string) -> bool {
 	recent_add(p)
 	log.infof("opened %s%s", p, fmt.tprintf(" (%d warning(s))", len(warnings)) if len(warnings) > 0 else "")
 	for w in warnings do log.warn(w)
-	if len(warnings) > 0 do message("Opened with warnings", strings.join(warnings, "\n", context.temp_allocator))
-	else do status(tcat("opened ", p))
+	// copies saved in it that the library here has other versions of: kept (they are what it
+	// was simulated with), but said, so that the part's editor can switch one
+	differ_note := ""
+	if differing := embedded_differing(&d.sch, sch_models(&d.sch, doc_sim(d), dir_of(p))); len(differing) > 0 {
+		differ_note = fmt.tprintf("%d saved model(s) differ from your library (%s): a part's editor can switch to the library's version", len(differing), strings.join(differing, ", ", context.temp_allocator))
+		log.info(differ_note)
+	}
+	if len(warnings) > 0 {
+		text := strings.join(warnings, "\n", context.temp_allocator)
+		if len(differ_note) > 0 do text = tcat(text, "\n", differ_note)
+		message("Opened with warnings", text)
+	} else if len(differ_note) > 0 {
+		status(tcat("opened ", p, "; ", differ_note))
+	} else {
+		status(tcat("opened ", p))
+	}
 	pref_put("last-dir", dir_name(p))
 	return true
 }

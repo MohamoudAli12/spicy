@@ -26,7 +26,7 @@ Symbols, models and default settings are built into the binary, so nothing else 
 ### Models and symbols
 - **Import SPICE models** (`.lib`, `.mod`, …). spicy makes a symbol for each subcircuit, matching its pins to the ports.
 - **Symbol editor:** draw graphics, place and name pins, map pins to subcircuit ports, and save to your own symbol library.
-- **Embed models:** a schematic can carry copies of the models and symbols it uses, so it simulates on any machine.
+- **Embed models:** a schematic can carry copies of the models and symbols it uses, so it simulates on any machine. When your library has another version of a saved model, opening the file says so, and the part's editor (or `spicy --embed <file.edn> --update`) switches to it.
 
 ### Simulation
 - Supports **ngspice**, **Xyce** and **VACASK**, and you can switch between them with **F7**. spicy translates the netlist to VACASK's own language automatically.
@@ -103,7 +103,8 @@ spicy --run <file> [--sim <id>] [--csv out.csv]     # simulate and list or save 
 spicy --run <file> --trace 'V(out)' [--trace …]    # range and last value of trace expressions
 spicy --import-asc <in.asc> <out.edn>               # convert an LTspice schematic
 spicy --import-model <file>                         # add a SPICE model library
-spicy --embed <file.edn>                            # embed used models and symbols in the file
+spicy --embed <file.edn> [--update]                 # embed used models and symbols in the file
+                                                    # (--update: your library's versions of those that differ)
 spicy --set-program <simulator> <path>              # set the program a simulator runs
 spicy --paths                                       # where settings, symbols, models and logs live
 spicy --check-config                                # check the config files for problems

@@ -708,7 +708,16 @@ draw_part_edit :: proc(d: ^Doc) {
 		if differs {
 			r = row(&b)
 			label_col(&r, "")
-			text_in(r, fit_text("Your library has another version: use Import… to switch to it", r.w - 8), th.warn, 0, fs(0.9), 4)
+			use_lib := "Use the library's version"
+			if button("dlg.uselib", cut_right(&r, text_w(use_lib) + 24), use_lib) {
+				// the copy is forgotten; saving copies the library's version in its place
+				doc_push_undo(d)
+				switched := embedded_use_library(&d.sch, strings.fields(dl.value, context.temp_allocator)[0])
+				status(tcat(c.ref, ": the library's version of ", strings.join(switched, ", ", context.temp_allocator), " (saved in the schematic when you save it)"))
+			}
+			tooltip(id_of("dlg.uselib"), "Simulate with your library's version of this model in place of the copy saved in the schematic (Undo goes back)")
+			cut_right(&r, 6)
+			text_in(r, fit_text("Your library has another version", r.w - 8), th.warn, 0, fs(0.9), 4)
 		}
 	}
 	if is_src {
