@@ -520,3 +520,34 @@ D2 A2 K DINNER
 	dual := row("duald")
 	testing.expectf(t, dual != nil && C.kind_def(dual.kind) != nil && C.kind_def(dual.kind).family == "Diodes", "DUALD: %v", dual)
 }
+
+@(test)
+datasheet_paths :: proc(t: ^testing.T) {
+	when ODIN_OS != .Windows {
+		target, url := C.datasheet_target("https://example.com/a.pdf", "/s")
+		testing.expect(t, url && target == "https://example.com/a.pdf", "a link stays as it is")
+		target, url = C.datasheet_target("www.example.com/a.pdf", "/s")
+		testing.expect_value(t, target, "https://www.example.com/a.pdf")
+		target, url = C.datasheet_target("docs/1n4148.pdf", "/s/proj")
+		testing.expect(t, !url && target == "/s/proj/docs/1n4148.pdf", "a relative file is from the schematic's folder")
+		target, _ = C.datasheet_target("\"/data/My Sheets/x.pdf\"", "/s")
+		testing.expect_value(t, target, "/data/My Sheets/x.pdf")
+		target, _ = C.datasheet_target("file:///data/My%20Sheets/x.pdf", "/s")
+		testing.expect_value(t, target, "/data/My Sheets/x.pdf")
+		target, _ = C.datasheet_target("  ", "/s")
+		testing.expect_value(t, target, "")
+		// saved: in the schematic's folder or below, relative to it; elsewhere as given
+		testing.expect_value(t, C.datasheet_store("/s/proj/docs/a.pdf", "/s/proj"), "docs/a.pdf")
+		testing.expect_value(t, C.datasheet_store("/s/proj/docs/a.pdf", "/s/proj/"), "docs/a.pdf")
+		testing.expect_value(t, C.datasheet_store("/s/project2/a.pdf", "/s/proj"), "/s/project2/a.pdf")
+		testing.expect_value(t, C.datasheet_store("/s/a.pdf", ""), "/s/a.pdf")
+		testing.expect_value(t, C.datasheet_store("https://x.org/a.pdf", "/s"), "https://x.org/a.pdf")
+	}
+	// a part's own datasheet; without one, nothing (no model has one here)
+	c := C.Comp{value = "1N4148", attrs = make([dynamic]C.Attr, context.temp_allocator)}
+	ds, from_model := C.comp_datasheet(&c)
+	testing.expect(t, ds == "" && !from_model, "no datasheet")
+	append(&c.attrs, C.Attr{"datasheet", " docs/d.pdf "})
+	ds, from_model = C.comp_datasheet(&c)
+	testing.expect(t, ds == "docs/d.pdf" && !from_model, "the part's own")
+}

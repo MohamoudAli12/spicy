@@ -423,6 +423,33 @@ check "model-info: same as file" "$bin" --model-info DI_B5819W "V=40 V" ':V 40 :
 check "model-info: another device" "$bin" --model-info plain1 kind=NPN "can be Rectifier, Switching, Schottky"
 check "model-info: no such rating" "$bin" --model-info plain1 R=1 "has no R rating"
 check "model-info: forget"   "$bin" --model-info plain1 --forget '{:name "PLAIN1" :kind "Schottky" :symbol "schottky" :V 30 :file "Vendor_Schottky.lib"}'
+
+# datasheets: a part's own (a file from the schematic's folder, or a link), else its model's;
+# --open hands it to the program SPICY_OPEN_WITH names (here one that notes what it was given)
+mkdir -p "$work/dsp/docs"
+cp "$root/examples/rc_lowpass.edn" "$work/dsp/"
+printf '%%PDF-1.4\n' >"$work/dsp/docs/1n4148.pdf"
+dsp="$work/dsp/rc_lowpass.edn"
+check "datasheet: none"        "$bin" --datasheet "$dsp" D1 "D1 has no datasheet"
+"$bin" --datasheet "$dsp" D1 >/dev/null 2>&1; [ $? = 1 ] && pass "datasheet: none exits 1" || fail "datasheet: none exits 1"
+check "datasheet: no part"     "$bin" --datasheet "$dsp" D9 "no part D9"
+check "datasheet: bad option"  "$bin" --datasheet "$dsp" D1 --nope "unknown option --nope"
+"$bin" --set "$dsp" D1.datasheet=docs/1n4148.pdf >/dev/null
+check "datasheet: the part's"  "$bin" --datasheet "$dsp" D1 ":from \"part\" :path \"$work/dsp/docs/1n4148.pdf\" :exists true"
+check "datasheet: from any folder" sh -c "cd / && '$bin' --datasheet '$dsp' D1" ":path \"$work/dsp/docs/1n4148.pdf\""
+for sim in ngspice xyce vacask; do
+	if [ "$("$bin" --netlist "$dsp" --sim $sim | tail -n +2)" = "$("$bin" --netlist "$root/examples/rc_lowpass.edn" --sim $sim | tail -n +2)" ]; then pass "datasheet: $sim netlist unchanged"; else fail "datasheet: $sim netlist unchanged"; fi
+done
+check "datasheet: the model's" sh -c "'$bin' --model-info 1N4148 datasheet=https://example.com/1n4148.pdf >/dev/null && '$bin' --set '$dsp' D1.datasheet= >/dev/null && '$bin' --datasheet '$dsp' D1" ':from "model" :link "https://example.com/1n4148.pdf"'
+check "datasheet: listed"      "$bin" --list models Switching ':datasheet "https://example.com/1n4148.pdf"'
+printf '#!/bin/sh\necho "$1" >>"%s/opened.txt"\n' "$work" >"$work/openwith.sh"
+chmod +x "$work/openwith.sh"
+SPICY_OPEN_WITH="$work/openwith.sh" "$bin" --datasheet "$dsp" D1 --open >/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$work/opened.txt" ] && break; sleep 0.1; done
+grep -qx "https://example.com/1n4148.pdf" "$work/opened.txt" 2>/dev/null && pass "datasheet: --open" || fail "datasheet: --open (got $(cat "$work/opened.txt" 2>/dev/null))"
+"$bin" --set "$dsp" D1.datasheet=docs/gone.pdf >/dev/null
+check "datasheet: --open a missing file" env SPICY_OPEN_WITH="$work/openwith.sh" "$bin" --datasheet "$dsp" D1 --open "datasheet not found: $work/dsp/docs/gone.pdf"
+"$bin" --model-info 1N4148 --forget >/dev/null
 sed 's/"MYD"/"MYDX"/' "$work/fet.edn" >"$work/typo.edn"
 check "missing model"        "$bin" --netlist "$work/typo.edn" "D1: model MYDX not found"
 printf '%s\n' '{:spicy-schematic 1 :components [{:symbol "res" :ref "R1" :value "1k" :at [0 0]}]' \

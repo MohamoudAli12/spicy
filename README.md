@@ -26,6 +26,7 @@ Symbols, models and default settings are built into the binary, so nothing else 
 ### Models and symbols
 - **Import SPICE models** (`.lib`, `.mod`, …). spicy makes a symbol for each subcircuit, matching its pins to the ports.
 - **Models by kind:** the parts picker shows your models as tiles by device kind (Rectifier, Schottky, Zener, NPN, N-MOSFET, Op-amp …) in the Diodes, Transistors and Amplifiers groups. A tile, or *Choose model…* in a part's editor, opens a table of the models with their ratings (VR, IF, VCEO, VDS, RDS(on) …), sortable by any column. Kinds and ratings come from the vendor's `*SRC=` lines and the model's own values; you can give a model what its file does not state (kept in `model-info.edn`, the file stays as it is).
+- **Datasheets:** every part has a *Datasheet* field in its editor: a PDF (or HTML) file, picked with *Browse…* or typed, or a `https://` link. A file in the schematic's folder or below is saved relative to it, so the folder can move with its datasheets. A model can have one too (the model table's editor): a part without its own opens its model's. *Open* in the editor, *Open datasheet* in a part's right-click menu or *Edit › Datasheet* opens it with your system's PDF viewer or browser.
 - **Symbol editor:** draw graphics, place and name pins, map pins to subcircuit ports, and save to your own symbol library.
 - **Embed models:** a schematic can carry copies of the models and symbols it uses, so it simulates on any machine. When your library has another version of a saved model, opening the file says so, and the part's editor (or `spicy --embed <file.edn> --update`) switches to it.
 
@@ -105,7 +106,9 @@ spicy --run <file> --trace 'V(out)' [--trace …]    # range and last value of t
 spicy --import-asc <in.asc> <out.edn>               # convert an LTspice schematic
 spicy --import-model <file>                         # add a SPICE model library
 spicy --list models [kind]                          # the models by kind, with their ratings
-spicy --model-info <model> [V=40 I=1A kind=…] [--forget]  # give a model ratings its file does not state
+spicy --model-info <model> [V=40 I=1A kind=… datasheet=…] [--forget]  # give a model ratings or a datasheet its file does not state
+spicy --set file.edn D1.datasheet=docs/1n4148.pdf   # a part's datasheet (a file or a link)
+spicy --datasheet file.edn D1 [--open]             # where it is (the part's, else its model's); --open opens it
 spicy --embed <file.edn> [--update]                 # embed used models and symbols in the file
                                                     # (--update: your library's versions of those that differ)
 spicy --set-program <simulator> <path>              # set the program a simulator runs

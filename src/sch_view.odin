@@ -925,7 +925,7 @@ interact_select :: proc(d: ^Doc, v: View, r: Rect, hit: Hit, msnap: P, mp: [2]f3
 		}
 		items: []string
 		switch hit.kind {
-		case .Comp: items = {"Edit…\tEnter", "Rotate\tCtrl+R", "Mirror\tCtrl+E", "Copy\tCtrl+C", "Delete\tDel", "-", "Probe current", "Probe voltages at the pins", "-", "Edit symbol…", "Reset name and value positions"}
+		case .Comp: items = {"Edit…\tEnter", "Rotate\tCtrl+R", "Mirror\tCtrl+E", "Copy\tCtrl+C", "Delete\tDel", "-", "Probe current", "Probe voltages at the pins", "-", "Edit symbol…", "Reset name and value positions", "-", "Open datasheet"}
 		case .Wire: items = {"Probe voltage", "Name this net…", "-", "Delete\tDel"}
 		case .Flag: items = {"Rename…", "Rotate\tCtrl+R", "Delete\tDel"}
 		case .Text: items = {"Edit…\tEnter", "Delete\tDel"}
@@ -962,6 +962,7 @@ context_pick :: proc(d: ^Doc, idx: int) {
 		case 10:
 			doc_push_undo(d)
 			for &c in d.sch.comps do if c.sel {c.ref_off = {}; c.val_off = {}}
+		case 12: comp_open_datasheet(d, h.idx)
 		}
 	case .Wire:
 		switch idx {

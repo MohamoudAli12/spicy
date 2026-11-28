@@ -28,8 +28,12 @@ usage:
                                            (--update: the library's versions of those that differ)
   spicy --model-info <model> [field=value …] [--forget]
                                            a model's kind and ratings (as --list models); give
-                                           fields (kind V I P R T F desc) the model file does not
-                                           state, or --forget them (kept in model-info.edn)
+                                           fields (kind V I P R T F desc datasheet) the model file
+                                           does not state, or --forget them (kept in model-info.edn)
+  spicy --datasheet <file.edn> <REF> [--open]
+                                           where a part's datasheet is (its own, else its model's);
+                                           --open opens it (PDF viewer or browser). Give a part one
+                                           with --set <file.edn> REF.datasheet=<file or link>
   spicy --set-program <simulator> <path>   the program a simulator runs (saved in settings.edn)
   spicy --paths                            where settings, symbols, models and logs live
   spicy --diagnostics                      versions, paths and environment (for bug reports)

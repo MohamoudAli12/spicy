@@ -288,7 +288,7 @@ win_input: ^Window_Input
 
 // test hooks (SPICY_ACTIONS click:x,y, dblclick:x,y, rclick:x,y, type:text): played in turn
 // after the run, through the same input as the mouse and keyboard
-Test_Event_Kind :: enum u8 {Click, Double, Right, Type}
+Test_Event_Kind :: enum u8 {Click, Double, Right, Type, Action}
 Test_Event :: struct {
 	kind: Test_Event_Kind,
 	pos:  [2]f32, // fractions of the window
@@ -435,6 +435,8 @@ test_event_frame :: proc() {
 		switch ev.kind {
 		case .Type:
 			if f == 0 do for c in ev.text do append(&ui.chars, c)
+		case .Action:
+			if f == 0 do test_action(ev.text)
 		case .Click, .Double, .Right:
 			test_mouse = ev.pos
 			b := 1 if ev.kind == .Right else 0

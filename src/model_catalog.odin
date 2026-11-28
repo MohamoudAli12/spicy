@@ -25,7 +25,7 @@ RATING_UNIT := [Rating]string {
 }
 
 // What of a row the user gave (model-info.edn).
-Row_Field :: enum u8 {Kind, V, I, P, R, T, F, Desc}
+Row_Field :: enum u8 {Kind, V, I, P, R, T, F, Desc, Sheet}
 
 Catalog_Row :: struct {
 	name:   string, // as the file writes it
@@ -34,6 +34,7 @@ Catalog_Row :: struct {
 	symbol: string, // the symbol a part with this model is placed as ("": none fits)
 	rating: [Rating]f64, // NaN: not stated
 	desc:   string,
+	sheet:  string, // the datasheet the user gave it (a link or a file), "" for none
 	file:   string,
 	mine:   bit_set[Row_Field],
 	// what the file states (before what the user gave): the model table compares with it
@@ -425,6 +426,7 @@ Model_Info :: struct {
 	kind:   string,
 	rating: [Rating]f64, // NaN: not given
 	desc:   string,
+	sheet:  string,
 	has:    bit_set[Row_Field],
 }
 
@@ -446,7 +448,8 @@ ROW_FIELD_KEY := [Row_Field]string {
 	.R    = "R",
 	.T    = "T",
 	.F    = "F",
-	.Desc = "desc",
+	.Desc  = "desc",
+	.Sheet = "datasheet",
 }
 
 model_info_path :: proc() -> string {return path_join(data_dir(), "model-info.edn")}
@@ -468,6 +471,7 @@ model_info_load :: proc() -> map[string]Model_Info {
 		for &r in mi.rating do r = math.nan_f64()
 		if edn_has(m, "kind") {mi.kind = edn_str(m, "kind"); mi.has += {.Kind}}
 		if edn_has(m, "desc") {mi.desc = edn_str(m, "desc"); mi.has += {.Desc}}
+		if edn_has(m, "datasheet") {mi.sheet = edn_str(m, "datasheet"); mi.has += {.Sheet}}
 		for r in Rating {
 			x, has := edn_get(m, RATING_KEY[r])
 			if has && edn_is_num(x) {
@@ -490,6 +494,7 @@ model_info_apply :: proc(row: ^Catalog_Row, mi: Model_Info) {
 		}
 	}
 	if .Desc in mi.has {row.desc = strings.clone(mi.desc); row.mine += {.Desc}}
+	if .Sheet in mi.has {row.sheet = strings.clone(mi.sheet); row.mine += {.Sheet}}
 	for r in Rating do if Row_Field(int(r) + 1) in mi.has {
 		row.rating[r] = mi.rating[r]
 		row.mine += {Row_Field(int(r) + 1)}
@@ -507,7 +512,7 @@ model_info_put :: proc(key: string, mi: Model_Info) -> string {
 	for x in all do append(&keys, x)
 	sort_strings(keys[:])
 	b := strings.builder_make(context.temp_allocator)
-	strings.write_string(&b, ";; What you gave models in spicy's model table: kinds and ratings the model files do\n;; not state (the files stay as they are). A key that is not there comes from the file.\n{")
+	strings.write_string(&b, ";; What you gave models in spicy's model table: kinds, ratings and datasheets the model\n;; files do not state (the files stay as they are). A key that is not there comes from the file.\n{")
 	for x, i in keys {
 		m := all[x]
 		if i > 0 do strings.write_string(&b, "\n ")
@@ -524,6 +529,7 @@ model_info_put :: proc(key: string, mi: Model_Info) -> string {
 			strings.write_string(&b, tcat(":", RATING_KEY[r], " ", edn_float_str(m.rating[r])))
 		}
 		if .Desc in m.has {sep(&b, &first); strings.write_string(&b, ":desc "); edn_quote(&b, m.desc)}
+		if .Sheet in m.has {sep(&b, &first); strings.write_string(&b, ":datasheet "); edn_quote(&b, m.sheet)}
 		strings.write_byte(&b, '}')
 	}
 	strings.write_string(&b, "}\n")
@@ -553,6 +559,14 @@ model_info_set :: proc(key: string, fields: map[string]string) -> string {
 			if !ok do return tcat("kind ", t, ": ", row.name, " can be ", strings.join(kinds_like(row.file_kind), ", ", context.temp_allocator))
 			mi.kind = t
 			mi.has += {.Kind}
+		case k == "datasheet":
+			// a link, or a file (a relative path from the current folder)
+			mi.has -= {.Sheet}
+			if len(t) == 0 do continue
+			p := clean_path(t)
+			if !datasheet_is_url(p) && !is_abs(p) && p[0] != '~' do p = path_join(cwd(), p)
+			mi.sheet = p
+			mi.has += {.Sheet}
 		case k == "desc":
 			mi.has -= {.Desc}
 			if t == row.file_desc do continue
@@ -561,7 +575,7 @@ model_info_set :: proc(key: string, fields: map[string]string) -> string {
 		case:
 			q, found := Rating(0), false
 			for r in Rating do if RATING_KEY[r] == k do q, found = r, true
-			if !found do return tcat("unknown field ", k, " (kind, V, I, P, R, T, F, desc)")
+			if !found do return tcat("unknown field ", k, " (kind, V, I, P, R, T, F, desc, datasheet)")
 			field := Row_Field(int(q) + 1)
 			// as shown (3 digits): left as it was, not the rounded value
 			if field in mi.has && t == rating_text(mi.rating[q], q) do continue

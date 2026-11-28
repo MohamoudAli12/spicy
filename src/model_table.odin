@@ -41,6 +41,7 @@ mt: struct {
 	ed_kind:   int,
 	ed_val:    [Rating]string,
 	ed_desc:   string,
+	ed_sheet:  string,
 }
 
 // From a device tile of the parts picker: the models of a family, the tile's kind selected.
@@ -103,6 +104,7 @@ mt_load :: proc() {
 		x := r
 		x.name = strings.clone(r.name, a); x.key = strings.clone(r.key, a); x.kind = strings.clone(r.kind, a)
 		x.symbol = strings.clone(r.symbol, a); x.desc = strings.clone(r.desc, a); x.file = strings.clone(r.file, a)
+		x.sheet = strings.clone(r.sheet, a)
 		x.file_kind = strings.clone(r.file_kind, a); x.file_desc = strings.clone(r.file_desc, a)
 		append(&mt.rows, x)
 	}
@@ -123,8 +125,13 @@ mt_load :: proc() {
 			for &e in list {
 				if seen[e.name] || !entry_fits_symbol(&e, sym) do continue
 				seen[e.name] = true
-				if i, ok := by_key[e.name]; ok && e.origin != .Directive && e.origin != .Embedded {
-					add(cat[i], a)
+				if i, ok := by_key[e.name]; ok {
+					// the schematic's copy of a library model: the kind, ratings and datasheet are
+					// the part's (the library row's, with what the user gave it), the copy is where
+					row := cat[i]
+					if e.origin == .Directive do row.file = "this schematic"
+					else if e.origin == .Embedded do row.file = tcat("saved in the schematic (", e.file, ")")
+					add(row, a)
 					continue
 				}
 				row, ok := catalog_row(&e)
@@ -300,7 +307,7 @@ draw_model_table :: proc(d: ^Doc) {
 	// the editor of the selected model
 	sel_row: ^Catalog_Row
 	for &r in mt.rows do if r.key == mt.sel do sel_row = &r
-	ed := cut_bottom(&b, 2 * (fs() + 12) + 14)
+	ed := cut_bottom(&b, 3 * (fs() + 12) + 20)
 	cut_bottom(&b, 8)
 
 	// the columns: name, kind, the ratings some row shown states, description, file
@@ -466,7 +473,7 @@ mt_editor :: proc(r: Rect, row: ^Catalog_Row) {
 	fill_round(b, th.hover, 6)
 	b = r_inset(b, 7)
 	if row == nil {
-		text_in(b, "Select a model to give it the kind, ratings or description its file does not state.", th.muted, 0, fs(0.9), 4)
+		text_in(b, "Select a model to give it the kind, ratings, description or datasheet its file does not state.", th.muted, 0, fs(0.9), 4)
 		return
 	}
 	if mt.ed_key != row.key {
@@ -478,10 +485,13 @@ mt_editor :: proc(r: Rect, row: ^Catalog_Row) {
 		for k, i in mt.ed_kinds do if k == row.kind do mt.ed_kind = i
 		for q in Rating do set_str(&mt.ed_val[q], rating_text(row.rating[q], q))
 		set_str(&mt.ed_desc, row.desc)
+		set_str(&mt.ed_sheet, row.sheet)
 	}
 	l1 := cut_top(&b, fs() + 12)
 	cut_top(&b, 6)
-	l2 := b
+	l2 := cut_top(&b, fs() + 12)
+	cut_top(&b, 6)
+	l3 := b
 	// line 1: kind and ratings
 	lab :: proc(r: ^Rect, t: string) {
 		text_in(cut_left(r, text_w(t, fs(0.9)) + 10), t, th.muted, 0, fs(0.9), 2)
@@ -506,8 +516,20 @@ mt_editor :: proc(r: Rect, row: ^Catalog_Row) {
 	cut_right(&l2, 10)
 	lab(&l2, "Description")
 	text_field("mt.ed.desc", l2, &mt.ed_desc)
+	// line 3: the datasheet (Save keeps it), a file picked or the one typed opened
+	open_l, browse_l := "Open", "Browse…"
+	ob := cut_right(&l3, text_w(open_l) + 30)
+	cut_right(&l3, 6)
+	bb := cut_right(&l3, text_w(browse_l) + 24)
+	cut_right(&l3, 10)
+	lab(&l3, "Datasheet")
+	text_field("mt.ed.sheet", l3, &mt.ed_sheet, "a PDF file or a https:// link")
+	if button("mt.ed.browse", bb, browse_l, tip = "Pick a datasheet file (Save keeps it for this model)") do datasheet_browse(.Model_Table, mt.ed_sheet, "")
+	if button("mt.ed.open", ob, open_l, len(strings.trim_space(mt.ed_sheet)) > 0, tip = "Open the datasheet: a file in your PDF viewer, a link in your browser") {
+		if e := datasheet_open(mt.ed_sheet, ""); len(e) > 0 do status_error(e)
+	}
 	if button("mt.ed.save", sb, save_l, tip = "Keep these for this model (in model-info.edn; the model file is not changed)") do mt_save(row)
-	if button("mt.ed.reset", rb, reset_l, card(row.mine) > 0, tip = "Forget what you gave this model: the file's kind and ratings") {
+	if button("mt.ed.reset", rb, reset_l, card(row.mine) > 0, tip = "Forget what you gave this model: the file's kind and ratings, no datasheet") {
 		if e := model_info_put(row.key, {}); len(e) > 0 do status_error(e)
 		else do status(tcat(row.name, ": the file's values"))
 		mt.ed_key = ""
@@ -521,6 +543,7 @@ mt_save :: proc(row: ^Catalog_Row) {
 	if mt.ed_kind < len(mt.ed_kinds) do fields["kind"] = mt.ed_kinds[mt.ed_kind]
 	for q in Rating do if q in device_ratings(row.file_kind) do fields[RATING_KEY[q]] = mt.ed_val[q]
 	fields["desc"] = mt.ed_desc
+	fields["datasheet"] = mt.ed_sheet
 	name := strings.clone(row.name, context.temp_allocator)
 	if e := model_info_set(row.key, fields); len(e) > 0 {
 		status_error(e)
@@ -539,3 +562,6 @@ tri :: proc(a, b, c: [2]f32, col: Color) {
 	if (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) > 0 do rl.DrawTriangle(a, c, b, rlc(col))
 	else do rl.DrawTriangle(a, b, c, rlc(col))
 }
+
+// A datasheet file picked for the selected model: into its editor's field (Save keeps it).
+model_table_set_sheet :: proc(path: string) {set_str(&mt.ed_sheet, path)}

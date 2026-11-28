@@ -118,7 +118,6 @@ parse_xy :: proc(s: string) -> P {
 	return {i32(x), i32(y)}
 }
 
-@(private = "file")
 find_comp :: proc(s: ^Schematic, ref: string) -> int {
 	for c, i in s.comps do if strings.equal_fold(c.ref, ref) do return i
 	return -1
@@ -561,6 +560,7 @@ em_catalog_row :: proc(r: ^Catalog_Row) {
 	em_key("symbol"); em_str(r.symbol)
 	for q in Rating do if !math.is_nan(r.rating[q]) {em_key(RATING_KEY[q]); em_num(r.rating[q])}
 	if len(r.desc) > 0 {em_key("description"); em_str(r.desc)}
+	if len(r.sheet) > 0 {em_key("datasheet"); em_str(r.sheet)}
 	em_key("file"); em_str(r.file)
 	if card(r.mine) > 0 {
 		em_key("yours")
@@ -842,6 +842,7 @@ cli_main :: proc(args: []string) -> bool {
 		case "--set-program": load_config(); cli_set_program(args)
 		case "--embed": load_config(); cli_embed(args)
 		case "--model-info": load_config(); cli_model_info(args)
+		case "--datasheet": load_config(); cli_datasheet(args)
 		case "--import-model", "--check-model": load_config(); cli_import_model(args)
 		case "--import-asc": load_config(); cli_import_asc(args)
 		case: return false

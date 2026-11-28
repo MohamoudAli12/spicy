@@ -21,6 +21,9 @@ Dialog_State :: struct {
 	attr_vals:       [dynamic]string,
 	model_sel:       int,
 	pinmap:          string,
+	datasheet:       string, // the part's own
+	sheet_back:      Dialog_Kind, // the dialog a datasheet file picked goes back to
+	sheet_start:     string, // the folder the datasheet picker starts in
 	src_kind:        int,
 	src_args:        [8]string,
 	src_dc:          string,
@@ -49,9 +52,14 @@ dialog_open :: proc(k: Dialog_Kind) {
 	app.dlg_win = cur_popout.doc_id if cur_popout != nil && cur_popout.kind == .Waves else 0
 	dl.pick = 0
 	switch k {
-	case .Open, .Save_As, .Export_Netlist, .Export_CSV, .Import_Model, .Pick_Program:
+	case .Open, .Save_As, .Export_Netlist, .Export_CSV, .Import_Model, .Pick_Program, .Pick_Datasheet:
 		start := pref_get("last-dir", "")
 		if len(d.path) > 0 do start = dir_name(d.path)
+		if k == .Pick_Datasheet {
+			// the folder of the datasheet now, else the last one a datasheet came from
+			if last := pref_get("datasheet-dir", ""); len(last) > 0 && dir_exists(last) do start = last
+			if dir_exists(dl.sheet_start) do start = dl.sheet_start
+		}
 		if k == .Pick_Program {
 			// where the program is now, else the home folder
 			start = home_dir()
@@ -131,11 +139,12 @@ dialog_part :: proc(d: ^Doc, ci: int) {
 	clear(&dl.attr_keys)
 	clear(&dl.attr_vals)
 	set_str(&dl.pinmap, comp_attr(c, "pinmap"))
+	set_str(&dl.datasheet, comp_attr(c, "datasheet"))
 	sym := symbol_find(c.sym)
 	params := nonideal_params(sym)
 	for &v, i in dl.ni_vals do set_str(&v, comp_attr(c, params[i].key) if i < len(params) else "")
 	attrs: for a in c.attrs {
-		if a.key == "pinmap" do continue // its own field
+		if a.key == "pinmap" || a.key == "datasheet" do continue // their own fields
 		for p in params do if p.key == a.key do continue attrs // the non-ideal section
 		append(&dl.attr_keys, strings.clone(a.key))
 		append(&dl.attr_vals, strings.clone(a.val))
@@ -425,7 +434,7 @@ draw_dialog :: proc() {
 	d := doc()
 	switch dl.kind {
 	case .None:
-	case .Open, .Save_As, .Export_Netlist, .Export_CSV, .Import_Model, .Pick_Program: draw_file_dialog(d)
+	case .Open, .Save_As, .Export_Netlist, .Export_CSV, .Import_Model, .Pick_Program, .Pick_Datasheet: draw_file_dialog(d)
 	case .Part_Picker: draw_part_picker(d)
 	case .Part_Edit: draw_part_edit(d)
 	case .Label_Name: draw_label_dialog(d)
@@ -467,6 +476,7 @@ draw_file_dialog :: proc(d: ^Doc) {
 	case .Export_Netlist: t = "Export the netlist"; exts = {"cir", "net", "sp", "sim"}
 	case .Export_CSV: t = "Export the waveforms as CSV"; exts = {"csv"}
 	case .Import_Model: t = "Import a SPICE model (.lib .mod .sub .cir .txt …)"; exts = MODEL_EXTS
+	case .Pick_Datasheet: t = "Datasheet (.pdf .html …)"; exts = DATASHEET_EXTS
 	case .Pick_Program:
 		t = "Program of the simulator"
 		if dl.idx >= 0 && dl.idx < len(S.simulators) do t = tcat("Program of ", S.simulators[dl.idx].name, " (the simulator's executable)")
@@ -538,10 +548,14 @@ draw_file_dialog :: proc(d: ^Doc) {
 	}
 	scroll_end("dlg.files", lr, f32(len(dirs) + len(files)) * ih)
 	if len(picked) > 0 do set_str(&dl.name, picked)
-	ok_label := "Open" if dl.kind == .Open else "Import" if dl.kind == .Import_Model else "Use" if dl.kind == .Pick_Program else "Save"
+	ok_label := "Open" if dl.kind == .Open else "Import" if dl.kind == .Import_Model else "Use" if dl.kind == .Pick_Program || dl.kind == .Pick_Datasheet else "Save"
 	res := buttons(&bot, ok_label, true, len(dl.name) > 0)
 	if opened do res = 1
 	if res < 0 {
+		if dl.kind == .Pick_Datasheet {
+			datasheet_back("")
+			return
+		}
 		dialog_close()
 		if app.quitting do app.quitting = false
 		return
@@ -557,6 +571,11 @@ draw_file_dialog :: proc(d: ^Doc) {
 			return
 		}
 		kind := dl.kind
+		if kind == .Pick_Datasheet {
+			pref_put("datasheet-dir", dir_name(p))
+			datasheet_back(p)
+			return
+		}
 		dialog_close()
 		#partial switch kind {
 		case .Open:
@@ -646,7 +665,7 @@ draw_part_edit :: proc(d: ^Doc) {
 	if sym != nil && !is_src && sym.kind == .Part {
 		if f := strings.fields(dl.value, context.temp_allocator); len(f) > 0 do from, differs = model_source(f[0], local)
 	}
-	h: f32 = 300 + f32(len(dl.attr_keys)) * 34
+	h: f32 = 334 + f32(len(dl.attr_keys)) * 34
 	if is_src do h += 330
 	if len(from) > 0 do h += 34
 	if differs do h += 34
@@ -718,6 +737,29 @@ draw_part_edit :: proc(d: ^Doc) {
 			tooltip(id_of("dlg.uselib"), "Simulate with your library's version of this model in place of the copy saved in the schematic (Undo goes back)")
 			cut_right(&r, 6)
 			text_in(r, fit_text("Your library has another version", r.w - 8), th.warn, 0, fs(0.9), 4)
+		}
+	}
+	// the datasheet: the part's own, else its model's (shown greyed as the hint)
+	{
+		r = row(&b)
+		label_col(&r, "Datasheet")
+		model_ds := ""
+		if f := strings.fields(dl.value, context.temp_allocator); len(f) > 0 do model_ds = model_datasheet(f[0])
+		open_l, browse_l := "Open", "Browse…"
+		ob := cut_right(&r, text_w(open_l) + 30)
+		cut_right(&r, 6)
+		bb := cut_right(&r, text_w(browse_l) + 24)
+		cut_right(&r, 6)
+		hint := tcat("the model's: ", model_ds) if len(model_ds) > 0 else "a PDF file or a https:// link"
+		text_field("dlg.datasheet", r, &dl.datasheet, hint)
+		base := dir_of(d.path)
+		if button("dlg.ds.browse", bb, browse_l, tip = "Pick a datasheet file (in the schematic's folder it is kept relative to it)") {
+			cur, url := datasheet_target(dl.datasheet, base)
+			datasheet_browse(.Part_Edit, "" if url else cur, base)
+		}
+		ds := dl.datasheet if len(strings.trim_space(dl.datasheet)) > 0 else model_ds
+		if button("dlg.ds.open", ob, open_l, len(strings.trim_space(ds)) > 0, tip = "Open the datasheet: a file in your PDF viewer, a link in your browser") {
+			if e := datasheet_open(ds, base if len(strings.trim_space(dl.datasheet)) > 0 else ""); len(e) > 0 do status(e, true)
 		}
 	}
 	if is_src {
@@ -797,6 +839,8 @@ draw_part_edit :: proc(d: ^Doc) {
 			if len(v) > 0 do comp_set_attr(c, p.key, v)
 			else do comp_remove_attr(c, p.key)
 		}
+		if ds := datasheet_store(dl.datasheet, dir_of(d.path)); len(ds) > 0 do comp_set_attr(c, "datasheet", ds)
+		else do comp_remove_attr(c, "datasheet")
 		pm := strings.trim_space(dl.pinmap)
 		if len(pm) > 0 do comp_set_attr(c, "pinmap", pm)
 		else do for a, i in c.attrs do if a.key == "pinmap" {

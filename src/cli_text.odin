@@ -80,6 +80,39 @@ cli_embed :: proc(args: []string) {
 	}
 }
 
+// --datasheet <file.edn> <REF> [--open]: where a part's datasheet is (its own, else its
+// model's) and, with --open, opens it as the GUI does.
+cli_datasheet :: proc(args: []string) {
+	USE :: "usage: spicy --datasheet <file.edn> <REF> [--open]"
+	if len(args) < 3 do cli_usage(USE)
+	open := false
+	for a in args[3:] {
+		if a == "--open" do open = true
+		else do cli_usage(tcat(USE, "   (unknown option ", a, ")"))
+	}
+	p := abs_path(args[1])
+	sch, _, err := load_schematic_file(p)
+	if len(err) > 0 do cli_fail(EXIT_FILE, "parse", err)
+	ci := find_comp(&sch, args[2])
+	if ci < 0 do cli_fail(EXIT_PROBLEMS, "not-found", tcat("no part ", args[2]))
+	c := &sch.comps[ci]
+	ds, from_model := comp_datasheet(c)
+	if len(ds) == 0 do cli_fail(EXIT_PROBLEMS, "no-datasheet", tcat(c.ref, " has no datasheet (give one: --set ", args[1], " ", c.ref, ".datasheet=<file or link>)"))
+	target, url := datasheet_target(ds, "" if from_model else dir_of(p))
+	em_begin()
+	em_map()
+	em_key("ref"); em_str(c.ref)
+	em_key("datasheet"); em_str(ds)
+	em_key("from"); em_str("model" if from_model else "part")
+	em_key("link" if url else "path"); em_str(target)
+	if !url {em_key("exists"); em_bool(file_exists(target))}
+	em_map_end()
+	em_print()
+	if open {
+		if e := datasheet_open(ds, "" if from_model else dir_of(p)); len(e) > 0 do cli_fail(EXIT_PROBLEMS, "open", e)
+	}
+}
+
 // --model-info <model> [field=value …] [--forget]: a model of the catalog; the fields given
 // are kept as the user's (model-info.edn), --forget drops them all.
 cli_model_info :: proc(args: []string) {

@@ -66,7 +66,7 @@ Drag :: struct {
 
 Dialog_Kind :: enum u8 {
 	None, Open, Save_As, Export_Netlist, Export_CSV, Part_Picker, Part_Edit, Label_Name, Text_Edit,
-	Sim_Command, Simulator_Pick, Text_View, Shortcuts, Confirm_Close, Message, About, Trace_Edit, Import_Model, Pick_Program, Appearance, Diagnostics, Import_Repair, Model_Table,
+	Sim_Command, Simulator_Pick, Text_View, Shortcuts, Confirm_Close, Message, About, Trace_Edit, Import_Model, Pick_Program, Appearance, Diagnostics, Import_Repair, Model_Table, Pick_Datasheet,
 }
 
 App :: struct {
@@ -436,6 +436,17 @@ run_action :: proc(name: string) {
 		sch_mirror(d)
 	case "edit/properties":
 		sch_edit_selected(d)
+	case "edit/datasheet":
+		ci := -1
+		for c, i in d.sch.comps do if c.sel {
+			if ci >= 0 {
+				ci = -2 // more than one
+				break
+			}
+			ci = i
+		}
+		if ci < 0 do status("select one part to open its datasheet", true)
+		else do comp_open_datasheet(d, ci)
 	case "edit/cancel":
 		sch_cancel(d)
 	case "place/wire":
@@ -681,7 +692,7 @@ menu_entries :: proc(name: string) -> []Menu_Entry {
 		sep(&items)
 		act(&items, "Cut", "edit/cut"); act(&items, "Copy", "edit/copy"); act(&items, "Paste", "edit/paste"); act(&items, "Duplicate", "edit/duplicate"); act(&items, "Delete", "edit/delete")
 		sep(&items)
-		act(&items, "Select all", "edit/select-all"); act(&items, "Rotate", "edit/rotate"); act(&items, "Mirror", "edit/mirror"); act(&items, "Properties…", "edit/properties")
+		act(&items, "Select all", "edit/select-all"); act(&items, "Rotate", "edit/rotate"); act(&items, "Mirror", "edit/mirror"); act(&items, "Properties…", "edit/properties"); act(&items, "Datasheet", "edit/datasheet")
 	case "Place":
 		act(&items, "Part…", "place/component"); act(&items, "Wire", "place/wire"); act(&items, "Ground", "place/ground"); act(&items, "Net label…", "place/label")
 		act(&items, "SPICE directive…", "place/directive"); act(&items, "Comment…", "place/comment"); act(&items, "Import SPICE model…", "file/import-model"); act(&items, "New symbol…", "symbol/new")
@@ -1244,48 +1255,13 @@ gui_main :: proc(files: []string) {
 		// test hook: SPICY_ACTIONS="sim/run;trace:V(out);trace:I(R1)" runs once at start
 		if frames == 3 && len(test_actions) > 0 {
 			for a in strings.split(test_actions, ";", context.temp_allocator) {
-				switch {
-				case strings.has_prefix(a, "trace:"): wave_add_trace(&doc().wave, a[6:], false)
-				case strings.has_prefix(a, "pane:"): wave_add_trace(&doc().wave, a[5:], true)
-				case strings.has_prefix(a, "fft:"): wave_add_fft(&doc().wave, a[4:])
-				case strings.has_prefix(a, "import:"): // File › Import SPICE model… of a file
-					import_model(doc(), a[7:])
-				case strings.has_prefix(a, "edit:"): // open the editor of a part by name
-					for c, i in doc().sch.comps do if c.ref == a[5:] do dialog_part(doc(), i)
-				case strings.has_prefix(a, "choose:"): // the model table of a part, as its editor's Choose model… opens it
-					for c, i in doc().sch.comps do if c.ref == a[7:] {
-						dialog_part(doc(), i)
-						if sym := symbol_find(c.sym); sym != nil do model_table_open_part(sym, c.ref, c.value)
-					}
-				case strings.has_prefix(a, "scroll:"): // scroll:parts.grid:600: a list scrolled down by so many pixels
-					if k := strings.last_index_byte(a, ':'); k > 7 {
-						px, _ := parse_eng(a[k + 1:])
-						ui.scroll[id_of(a[7:k])] = f32(px)
-					}
-				case strings.has_prefix(a, "models:"): // models:Diodes/Zener: a kind's tile in the parts picker clicked
-					fk := strings.split_n(a[7:], "/", 2, context.temp_allocator)
-					if len(fk) == 2 do model_table_open_place(fk[0], fk[1], "")
-				case strings.has_prefix(a, "click:"), strings.has_prefix(a, "dblclick:"), strings.has_prefix(a, "rclick:"):
-					// a click, double- or right-click at x,y (fractions of the window) after the run
-					kind := Test_Event_Kind.Click
-					if strings.has_prefix(a, "dblclick:") do kind = .Double
-					if strings.has_prefix(a, "rclick:") do kind = .Right
-					xy := strings.split(a[strings.index_byte(a, ':') + 1:], ",", context.temp_allocator)
-					if len(xy) == 2 {
-						fx, _ := parse_eng(xy[0])
-						fy, _ := parse_eng(xy[1])
-						append(&test_events, Test_Event{kind = kind, pos = {f32(fx), f32(fy)}})
-						test_ev_frame = -1
-					}
-				case strings.has_prefix(a, "type:"): // type:1N4742: typed into the focused field, in turn with the clicks
-					append(&test_events, Test_Event{kind = .Type, text = strings.clone(a[5:])})
-					test_ev_frame = -1
-				case strings.has_prefix(a, "menu:"): // menu:View/UI scale/150 %: picks a menu item as a click does
-					test_menu_pick(a[5:])
-				case strings.has_prefix(a, "in-waves:"): // run inside the waveform window
-					for p in popouts do if p.kind == .Waves do p.test_action = strings.clone(a[9:])
-				case: run_action(a)
+				// after a click or typing, an action waits its turn (file/save after an edit)
+				is_event := strings.has_prefix(a, "click:") || strings.has_prefix(a, "dblclick:") || strings.has_prefix(a, "rclick:") || strings.has_prefix(a, "type:")
+				if !is_event && len(test_events) > 0 {
+					append(&test_events, Test_Event{kind = .Action, text = strings.clone(a)})
+					continue
 				}
+				test_action(a)
 			}
 		}
 		busy := false
@@ -1382,4 +1358,50 @@ import_model_apply :: proc(d: ^Doc, path: string, repair: bool) {
 		}
 	}
 	message("Import SPICE model", fmt.tprintf("Imported %s.\nModels: %s\n\nThey are now offered in the model list of the matching parts (double-click a diode or transistor).", summary, strings.join(res.models[:], ", ", context.temp_allocator)))
+}
+
+// A test hook of SPICY_ACTIONS (or a menu action by its name).
+test_action :: proc(a: string) {
+	switch {
+	case strings.has_prefix(a, "trace:"): wave_add_trace(&doc().wave, a[6:], false)
+	case strings.has_prefix(a, "pane:"): wave_add_trace(&doc().wave, a[5:], true)
+	case strings.has_prefix(a, "fft:"): wave_add_fft(&doc().wave, a[4:])
+	case strings.has_prefix(a, "import:"): // File › Import SPICE model… of a file
+		import_model(doc(), a[7:])
+	case strings.has_prefix(a, "edit:"): // open the editor of a part by name
+		for c, i in doc().sch.comps do if c.ref == a[5:] do dialog_part(doc(), i)
+	case strings.has_prefix(a, "choose:"): // the model table of a part, as its editor's Choose model… opens it
+		for c, i in doc().sch.comps do if c.ref == a[7:] {
+			dialog_part(doc(), i)
+			if sym := symbol_find(c.sym); sym != nil do model_table_open_part(sym, c.ref, c.value)
+		}
+	case strings.has_prefix(a, "scroll:"): // scroll:parts.grid:600: a list scrolled down by so many pixels
+		if k := strings.last_index_byte(a, ':'); k > 7 {
+			px, _ := parse_eng(a[k + 1:])
+			ui.scroll[id_of(a[7:k])] = f32(px)
+		}
+	case strings.has_prefix(a, "models:"): // models:Diodes/Zener: a kind's tile in the parts picker clicked
+		fk := strings.split_n(a[7:], "/", 2, context.temp_allocator)
+		if len(fk) == 2 do model_table_open_place(fk[0], fk[1], "")
+	case strings.has_prefix(a, "click:"), strings.has_prefix(a, "dblclick:"), strings.has_prefix(a, "rclick:"):
+		// a click, double- or right-click at x,y (fractions of the window) after the run
+		kind := Test_Event_Kind.Click
+		if strings.has_prefix(a, "dblclick:") do kind = .Double
+		if strings.has_prefix(a, "rclick:") do kind = .Right
+		xy := strings.split(a[strings.index_byte(a, ':') + 1:], ",", context.temp_allocator)
+		if len(xy) == 2 {
+			fx, _ := parse_eng(xy[0])
+			fy, _ := parse_eng(xy[1])
+			append(&test_events, Test_Event{kind = kind, pos = {f32(fx), f32(fy)}})
+			test_ev_frame = -1
+		}
+	case strings.has_prefix(a, "type:"): // type:1N4742: typed into the focused field, in turn with the clicks
+		append(&test_events, Test_Event{kind = .Type, text = strings.clone(a[5:])})
+		test_ev_frame = -1
+	case strings.has_prefix(a, "menu:"): // menu:View/UI scale/150 %: picks a menu item as a click does
+		test_menu_pick(a[5:])
+	case strings.has_prefix(a, "in-waves:"): // run inside the waveform window
+		for p in popouts do if p.kind == .Waves do p.test_action = strings.clone(a[9:])
+	case: run_action(a)
+	}
 }
