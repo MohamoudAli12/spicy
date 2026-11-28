@@ -108,7 +108,8 @@ element_like :: proc(t: string) -> bool {
 	if len(t) == 0 || !is_ident_start(t[0]) do return false
 	f := strings.fields(t, context.temp_allocator)
 	if len(f) < 3 do return false
-	for i in 0 ..< len(f[0]) do if !is_ident_char(f[0][i]) do return false
+	// a name as SPICE reads it, up to the space; "+" and "-" too ("GVO+" in TI's models)
+	for i in 0 ..< len(f[0]) do if !is_ident_char(f[0][i]) && f[0][i] != '+' && f[0][i] != '-' do return false
 	alnum := false
 	for i in 0 ..< len(f[1]) do if is_ident_char(f[1][i]) do alnum = true
 	return alnum
@@ -635,9 +636,16 @@ card_close_paren :: proc(card: [dynamic]Rline, name: string, rep: ^Repair_Report
 	card := card
 	opened, closed_at := false, -1
 	depth_p := 0
+	// not the parentheses of an expression: KF={PWR(FLW,0.5)/1E11}, KF='…'
+	in_brace, in_quote := 0, false
 	find: for &c, ci in card {
 		for p in 0 ..< len(c.text) {
-			switch c.text[p] {
+			ch := c.text[p]
+			if ch == '\'' do in_quote = !in_quote
+			if ch == '{' do in_brace += 1
+			if ch == '}' do in_brace = max(0, in_brace - 1)
+			if in_quote || in_brace > 0 || ch == '}' do continue
+			switch ch {
 			case '(':
 				depth_p += 1
 				opened = true

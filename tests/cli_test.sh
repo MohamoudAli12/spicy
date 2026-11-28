@@ -310,6 +310,9 @@ check "repaired: port line"    grep "^\.SUBCKT PAF" "$models_dir/paf.lib" ".SUBC
 check "ports as parameters: symbol" grep -A1 '{:name "PAF"' "$imported" ':like "nmos"'
 printf '.SUBCKT PRR a b R=10\nR1 a b {R}\n.ENDS\n' > "$work/prr.lib"
 check "real parameter kept"    "$bin" --check-model "$work/prr.lib" "no problems found"
+# what is right is left as it is: "+" in an element's name (TI), parentheses in an expression
+printf '.SUBCKT CLMP a b c\nGVO+ a b VALUE = {IF(V(c)>0,1,0)}\nD1 a b DVN\n.MODEL DVN D KF={PWR(10,0.5)/1E11} IS=1E-16\n.ENDS\n' > "$work/clmp.lib"
+check "expressions not repaired" "$bin" --check-model "$work/clmp.lib" "no problems found"
 # a dot in a file's name is not its extension: two files, two copies
 printf '.SUBCKT SKA a k\nD1 a k DS\n.MODEL DS D(IS=1n)\n.ENDS\n' > "$work/Sk (Less than .5A).spice.txt"
 printf '.SUBCKT SKB a k\nD1 a k DS\n.MODEL DS D(IS=2n)\n.ENDS\n' > "$work/Sk (.5A and Above).spice.txt"
