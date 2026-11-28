@@ -59,6 +59,7 @@ Symbols, models and default settings are built into the binary, so nothing else 
 ### Import
 - **LTspice `.asc` schematics:** open them directly or convert them with `--import-asc`.
 - **SPICE netlists** (`.cir`, `.net`, `.sp`, …): each element becomes a part, wired up with net labels.
+- **PSpice and LTspice models:** ngspice runs in its PSpice or LTspice compatibility mode when a model needs it (`mfg=`, LTspice's ideal diode, `uplim()`, PSpice's `VALUE` sources …). What a simulator cannot run (an LTspice function Xyce lacks, VDMOS on Xyce) is an error before the run; an ideal diode on Xyce or VACASK, which they simulate as a plain diode, is a warning. See `reference/spicy_RG.md` §6.1.
 
 ### Customisation
 All configuration is plain [EDN](https://github.com/edn-format/edn) and **reloads as soon as you save it**:

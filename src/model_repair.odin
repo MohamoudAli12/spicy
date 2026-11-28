@@ -38,6 +38,9 @@ Repair_Kind :: enum u8 {
 	Undefined_Model,
 	Capacitance_Unit,
 	Implausible_N,
+	Lt_Ideal_Diode,
+	Vdmos_Model,
+	Lt_Function,
 }
 
 FIRST_CHECK :: Repair_Kind.Type_Vs_Description
@@ -85,6 +88,9 @@ repair_kind_text :: proc(k: Repair_Kind) -> string {
 	case .Undefined_Model: return "models or subcircuits used but defined nowhere"
 	case .Implausible_N: return "diodes with an emission coefficient N below 0.01 or above 100000 (a unit wrong?)"
 	case .Capacitance_Unit: return "capacitances of a millifarad or more (a unit like \"p\" missing?)"
+	case .Lt_Ideal_Diode: return "LTspice ideal diodes (Ron, Roff, Vfwd …): ngspice runs them; Xyce and VACASK simulate a plain diode instead"
+	case .Vdmos_Model: return "VDMOS power MOSFETs (LTspice's): ngspice and VACASK run them, Xyce does not"
+	case .Lt_Function: return "functions only LTspice has, which a simulator here lacks"
 	}
 	return ""
 }
@@ -213,6 +219,7 @@ model_repair :: proc(text: string, replacing := "") -> (fixed: string, rep: Repa
 	L = repair_model_cards(L[:], &rep)
 	blocks, drop := repair_blocks(L[:], &rep)
 	repair_undefined(L[:], blocks[:], drop, replacing, &rep)
+	repair_lt_functions(L[:], drop, &rep)
 
 	for len(L) > 0 && len(L[len(L) - 1].text) == 0 do pop(&L)
 	b := strings.builder_make()
@@ -594,7 +601,11 @@ repair_model_cards :: proc(L: []Rline, rep: ^Repair_Report) -> [dynamic]Rline {
 				if eq := strings.index_byte(tok, '='); eq > 0 do params[upper(tok[:eq])] = tok[eq + 1:]
 			}
 		}
+		if typ == "VDMOS" || strings.has_prefix(typ, "VDMOS(") do add_item(rep, .Vdmos_Model, card[0].n, name, "")
 		if typ == "D" || strings.has_prefix(typ, "D(") {
+			ideal := make([dynamic]string)
+			for k in LT_IDEAL_DIODE_PARAMS do if _, has := params[upper(k)]; has do append(&ideal, tcat(upper(k[:1]), k[1:]))
+			if len(ideal) > 0 do add_item(rep, .Lt_Ideal_Diode, card[0].n, name, tcat(strings.join(ideal[:], ", "), ": Xyce and VACASK simulate a plain diode"))
 			nv, has_n := parse_eng(params["N"])
 			if has_n && (nv < 0.01 || nv > 1e5) do add_item(rep, .Implausible_N, card[0].n, name, tcat("N=", params["N"]))
 			if _, has_bv := params["BV"]; has_bv && has_n && nv != 1 {
@@ -905,6 +916,30 @@ repair_undefined :: proc(L: []Rline, blocks: []Card_Block, drop: map[int]bool, r
 			add_item(rep, .Undefined_Model, l.n, sub, fmt.tprintf("%s uses %s", g[0], name))
 		}
 		li = e
+	}
+}
+
+// LTspice functions (uplim(), buf() …) that a simulator here does not have.
+@(private = "file")
+repair_lt_functions :: proc(L: []Rline, drop: map[int]bool, rep: ^Repair_Report) {
+	texts := make([dynamic]string)
+	for l in L do append(&texts, l.text)
+	funcs := defined_funcs(texts[:])
+	sub := ""
+	for l, k in L {
+		if drop[k] || len(l.text) == 0 || l.text[0] == '*' do continue
+		low := lower(l.text)
+		if strings.has_prefix(low, ".subckt") {
+			f := strings.fields(l.text, context.temp_allocator)
+			sub = f[1] if len(f) > 1 else ""
+		} else if strings.has_prefix(low, ".ends") do sub = ""
+		for u in lt_funcs_used([]string{l.text}, funcs, sub) {
+			el := strings.fields(l.text, context.temp_allocator)[0]
+			if el == "+" do el = "a \"+\" line"
+			lacks := "ngspice and Xyce" if u.fn.no_ng && !u.fn.xyce else "ngspice" if u.fn.no_ng else "Xyce"
+			if !u.fn.no_ng && u.fn.xyce do continue // everyone has it (in ngspice's PSpice or LTspice mode)
+			add_item(rep, .Lt_Function, l.n, sub, fmt.tprintf("%s uses %s(): not in %s (%s)", el, u.fn.name, lacks, lt_func_where(u.fn)))
+		}
 	}
 }
 

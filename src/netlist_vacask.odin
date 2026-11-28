@@ -401,6 +401,7 @@ vacask_models :: proc(nl: ^Netlist, s: ^Schematic, vb: ^Vacask_Build) {
 	}
 	append(&all_cards, ..defaults[:])
 	for card in all_cards {
+		lt_diode_warn(nl, card, "VACASK")
 		osdi, line, err := vacask_model(card)
 		if len(err) > 0 {
 			append(&nl.errors, err)
@@ -762,15 +763,17 @@ vacask_model :: proc(card: string) -> (load: string, line: string, err: string) 
 	for p in params {
 		if p[0] == "level" || p[0] == "type" do continue
 		if vacask_pspice_only(module, p[0]) do continue
-		if module == "sp_diode" && !slice.contains(VACASK_DIODE_PARAMS, p[0]) {
-			// as ngspice: a parameter the diode does not have is left out (VACASK would stop)
+		// as ngspice: a parameter the device does not have is left out (VACASK would stop),
+		// such as LTspice's mfg= and ratings (Vds, Ron, Qg …)
+		known := VACASK_DIODE_PARAMS if module == "sp_diode" else vacask_model_params(module)
+		if known != nil && !slice.contains(known, p[0]) {
 			append(&dropped, p[0])
 			continue
 		}
 		fmt.sbprintf(&b, " %s=%s", p[0], vacask_value(p[1]))
 	}
 	if len(dropped) > 0 {
-		return osdi, fmt.tprintf("// %s: %s left out (not parameters of VACASK's diode)\n%s", name, strings.join(dropped[:], ", ", context.temp_allocator), strings.to_string(b)), ""
+		return osdi, fmt.tprintf("// %s: %s left out (not parameters of VACASK's %s)\n%s", name, strings.join(dropped[:], ", ", context.temp_allocator), module, strings.to_string(b)), ""
 	}
 	return osdi, strings.to_string(b), ""
 }
@@ -868,6 +871,7 @@ vacask_subckt :: proc(nl: ^Netlist, o: ^Vacask_Out, e: ^Lib_Entry) {
 		switch {
 		case strings.has_prefix(low, ".ends"):
 		case strings.has_prefix(low, ".model"):
+			lt_diode_warn(nl, t, "VACASK")
 			osdi, ml, err := vacask_model(t)
 			if len(err) > 0 {
 				append(&nl.errors, fmt.tprintf("VACASK, subcircuit %s: %s", e.name, err))
@@ -912,7 +916,7 @@ spice_element_line :: proc(t: string) -> bool {
 	     "options", "analysis", "sweep", "save", "print", "global", "ground", "postprocess", "var", "abort":
 		return false
 	}
-	return strings.index_byte("rclviegfhdmqjxsRCLVIEGFHDMQJXS", f[0][0]) >= 0
+	return strings.index_byte("rclviegfhdmqjxsbRCLVIEGFHDMQJXSB", f[0][0]) >= 0
 }
 
 // A SPICE element line of a directive in VACASK form; defined: the models the directives define.
@@ -970,6 +974,7 @@ vacask_element :: proc(nl: ^Netlist, o: ^Vacask_Out, line: string, local_models:
 		if local[lower(n)] do return
 		e := model_lookup(n, o.local)
 		if e == nil || e.subckt do return
+		lt_diode_warn(nl, e.text, "VACASK")
 		osdi, ml, err := vacask_model(e.text)
 		if len(err) > 0 {
 			append(&nl.errors, err)
@@ -1036,6 +1041,8 @@ vacask_element :: proc(nl: ^Netlist, o: ^Vacask_Out, line: string, local_models:
 		if !is_model(plain[4], local_models) do return "", fmt.tprintf("\"%s\": no known model", line)
 		need_model(nl, o, plain[4], local_models)
 		return fmt.tprintf("%s (%s) %s", name, nodes(plain[:4]), vacask_name(plain[4])), ""
+	case 'b':
+		return "", fmt.tprintf("\"%s\": spicy cannot translate behavioural (B) sources for VACASK. Correct: run it on ngspice or Xyce", line)
 	case 'x':
 		if len(plain) < 2 do return "", fmt.tprintf("\"%s\": nodes and a subcircuit needed", line)
 		sub := plain[len(plain) - 1]

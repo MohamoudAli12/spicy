@@ -22,6 +22,7 @@ Contents
    - 4.2 Integrated noise
 5. Command line
 6. Simulator support
+   - 6.1 PSpice and LTspice models
 7. Examples
 
 ---
@@ -424,6 +425,42 @@ spicy --run <file> --trace 'EXPR' [--trace 'EXPR' …]
 | `.noise` alongside other analyses | Yes | No: Xyce runs only `.noise` | Yes |
 | `.noise` output node | `V(out)` or `V(out,ref)` | `V(out)` only (Xyce 7.10 rejects `V(out,ref)`) | `V(out)` only (spicy's translation) |
 | `.noise` `lin` sweep | Yes | Yes | Yes (spicy converts the count) |
+
+### 6.1 PSpice and LTspice models
+
+Vendor models are written for PSpice or LTspice. spicy runs ngspice in its compatibility mode
+for the whole netlist when the netlist (or a file it `.include`s) needs one, and says so in the
+netlist's second line (`* LTspice models (…): spicy runs ngspice -D ngbehavior=lta`):
+
+| The netlist has | ngspice mode |
+|---|---|
+| PSpice: `VSWITCH` / `ISWITCH` models, `TEMP` in expressions, `VALUE` / `TABLE` / `LAPLACE` / `FREQ` sources, `if()`, `int()` | `psa` |
+| LTspice: `mfg=` or a text `type=` in a model, an ideal diode, `uplim()`, `dnlim()`, `uplim_tanh()`, `dnlim_tanh()` | `lta` |
+| Both | `ltpsa` |
+
+A simulator command in `settings.edn` that sets `ngbehavior` itself is left as it is.
+
+What each simulator runs (ngspice 47, Xyce 7.10, VACASK 0.3.4):
+
+| Model feature | ngspice | Xyce | VACASK |
+|---|---|---|---|
+| `mfg=`, `type=`, ratings (`Iave`, `Vpk`, `Vds`, `Ron`, `Qg`, `Vceo`, `Icrating` …) | Yes (`lta`) | Yes (ignored) | Yes (left out, as any parameter a VACASK device does not have) |
+| LTspice ideal diode: `D(Ron= Roff= Vfwd= …)` | Yes (`lta`: ngspice's `sidiode`) | No: a plain diode, a wrong result (warning) | No: a plain diode, a wrong result (warning) |
+| `VDMOS` | Yes | No (error before the run) | Yes |
+| `uplim()`, `dnlim()`, `uplim_tanh()`, `dnlim_tanh()` | Yes (`lta`) | No (error) | No B sources (error) |
+| `buf()`, `inv()`, `absdelay()`, `delay()`, `idt()`, `idtmod()`, `hypot()`, `round()`, `rand()`, `random()`, `white()` | No (error) | No (error) | No B sources (error) |
+| `sdt()`, `table()`, `atan2()` | No (error) | Yes | No B sources (error) |
+| `u()` | Yes | No (error) | No B sources (error) |
+| `if()`, `int()` | Yes (`psa`) | Yes | No B sources (error) |
+
+The errors and warnings come before the run, and only for what the circuit uses: a library's
+other subcircuits and models are not checked, as no simulator reads them. A function defined by a
+`.func` (in the subcircuit, or outside every subcircuit) is the `.func`'s. Where there is a simple
+equivalent the error gives it: `buf(x)` is `x>0.5 ? 1 : 0`, `inv(x)` is `x>0.5 ? 0 : 1`,
+`hypot(x,y)` is `sqrt(x*x+y*y)`.
+
+`spicy --check-model <file>` and the import report list the ideal diodes, VDMOS models and
+LTspice functions of a library under "To check yourself".
 
 ---
 

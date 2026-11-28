@@ -246,6 +246,78 @@ for want in 'parameters without "="' '"+" in the middle of a line' 'parameters g
 done
 "$bin" --check-model "$work/faulty.lib" >/dev/null 2>&1; [ $? = 1 ] && pass "check-model exit 1 on faults" || fail "check-model exit 1 on faults"
 check "check-model clean"    "$bin" --check-model "$work/fet.lib" "no problems found"
+# LTspice models: what a simulator here cannot run, or runs wrongly, listed (mfg= and type= are
+# not: ngspice reads them in its LTspice mode, Xyce and VACASK leave them out)
+cat >"$work/lt.lib" <<'EOF'
+.model 1N4148X D(Is=2.52n Rs=.568 N=1.752 Iave=200m Vpk=75 mfg=OnSemi type=silicon)
+.model IRF530X VDMOS(Rg=3 Vto=4 Kp=6 Cgs=600p mfg=Vishay Vds=100 Ron=160m Qg=26n)
+.model IDEAL D(Ron=0.1 Roff=1Meg Vfwd=0.6)
+.subckt LTB in out
+B1 out 0 V=uplim(V(in),1,0.1)
+B2 out 0 V=buf(V(in))
+.ends
+.subckt OWN in out
+.func buf(x) {x}
+B1 out 0 V=buf(V(in))
+.ends
+EOF
+out=$("$bin" --check-model "$work/lt.lib" 2>&1)
+for want in "line 2      IRF530X            VDMOS power MOSFETs (LTspice's): ngspice and VACASK run them, Xyce does not" \
+	"line 3      IDEAL              Ron, Roff, Vfwd: Xyce and VACASK simulate a plain diode" \
+	"line 5      LTB                B1 uses uplim(): not in Xyce (ngspice has it)" \
+	"line 6      LTB                B2 uses buf(): not in ngspice and Xyce (neither ngspice nor Xyce has it)" \
+	"To check yourself (4, not changed)"; do
+	if grep -qF -- "$want" <<<"$out"; then pass "check-model lt: $want"; else fail "check-model lt: $want"; sed 's/^/     /' <<<"$out"; fi
+done
+# a .func of the subcircuit (and only there), mfg= and type=: nothing to say
+if grep -qE "OWN|1N4148X" <<<"$out"; then fail "check-model lt: nothing about OWN or 1N4148X"; sed 's/^/     /' <<<"$out"; else pass "check-model lt: nothing about OWN or 1N4148X"; fi
+# not LTspice's: a .func of the file, PSpice's TABLE source, if() (ngspice's PSpice mode and Xyce have it)
+cat >"$work/ltown.lib" <<'EOF'
+.func buf(x) {x}
+.subckt OWN2 in out
+B1 out 0 V=buf(V(in))
+E1 out 0 TABLE {V(in)} = (0,0) (1,1)
+B2 out 0 V=if(V(in)>0.5,1,0)
+.ends
+EOF
+check "check-model lt: .func, TABLE, if()" "$bin" --check-model "$work/ltown.lib" "no problems found"
+# the same before a run: ngspice in its LTspice mode for mfg=, the ideal diode and uplim(),
+# with PSpice's too when the netlist has both; buf() stops ngspice and Xyce, uplim() and
+# VDMOS stop Xyce; the ideal diode is a plain one on Xyce and VACASK
+ltsch() { # file, directive text
+	printf '%s\n' '{:spicy-schematic 1 :components [{:symbol "res" :ref "R1" :value "1k" :at [0 0]}]' \
+		' :flags [{:name "b" :at [16 16]} {:name "0" :at [16 96]}]' " :texts [{:at [0 200] :text \"$2\" :directive true}]}" >"$1"
+}
+ltsch "$work/ltmfg.edn" 'V1 a 0 2\nD1 a b 1N4148X\n.include lt.lib\n.op'
+ltsch "$work/ltideal.edn" 'V1 a 0 2\nD1 a b IDEALX\n.model IDEALX D(Ron=1 Roff=1Meg Vfwd=0.5)\n.op'
+ltsch "$work/ltup.edn" 'V1 a 0 2\nB1 b 0 V=uplim(V(a),1,0.1)\n.op'
+ltsch "$work/ltboth.edn" 'V1 a 0 2\nD1 a b 1N4148X\n.include lt.lib\nB1 c 0 V={1+0*TEMP}\nR2 c 0 1k\n.op'
+ltsch "$work/ltif.edn" 'V1 a 0 2\nB1 b 0 V=if(V(a)>0.5,0.25,0)\n.op'
+ltsch "$work/ltbuf.edn" 'V1 a 0 2\nB1 b 0 V=buf(V(a))\n.op'
+ltsch "$work/ltvd.edn" 'V1 a 0 2\nM1 b a 0 0 IRF530X\n.include lt.lib\n.op'
+check "lt mode: mfg= in an .include" "$bin" --netlist "$work/ltmfg.edn" "* LTspice models (LTspice's mfg= model parameter): spicy runs ngspice -D ngbehavior=lta"
+check "lt mode: ideal diode"  "$bin" --netlist "$work/ltideal.edn" "* LTspice models (LTspice ideal diodes): spicy runs ngspice -D ngbehavior=lta"
+check "lt mode: uplim()"      "$bin" --netlist "$work/ltup.edn" "* LTspice models (LTspice's uplim()): spicy runs ngspice -D ngbehavior=lta"
+check "lt and pspice modes"   "$bin" --netlist "$work/ltboth.edn" "* PSpice models (TEMP in expressions) and LTspice models (LTspice's mfg= model parameter): spicy runs ngspice -D ngbehavior=ltpsa"
+check "pspice mode: if()"     "$bin" --netlist "$work/ltif.edn" "* PSpice models (if()): spicy runs ngspice -D ngbehavior=psa"
+check "ngspice: buf()"        "$bin" --check "$work/ltbuf.edn" 'B1: buf() is an LTspice function ngspice does not have (neither ngspice nor Xyce has it). Correct: x>0.5 ? 1 : 0'
+check "xyce: uplim()"         "$bin" --check "$work/ltup.edn" --sim xyce 'B1: uplim() is an LTspice function Xyce does not have (ngspice has it)'
+ltsch "$work/ltsub.edn" 'V1 a 0 2\nX1 a b LTB\n.include lt.lib\n.op'
+check "xyce: uplim() in a subcircuit" "$bin" --check "$work/ltsub.edn" --sim xyce 'B1 in subcircuit LTB: uplim()'
+# what the circuit does not use is not run: LTB's buf(), IRF530X, IDEAL of lt.lib
+check "xyce: unused parts of a library" "$bin" --check "$work/ltmfg.edn" --sim xyce ':ok true :errors [] :warnings []'
+check "ngspice: unused parts of a library" "$bin" --check "$work/ltmfg.edn" ':ok true :errors [] :warnings []'
+check "xyce: VDMOS"           "$bin" --check "$work/ltvd.edn" --sim xyce 'model IRF530X: VDMOS (an LTspice power MOSFET) is not a Xyce model. Correct: run it on ngspice or VACASK'
+check "xyce: ideal diode"     "$bin" --check "$work/ltideal.edn" --sim xyce 'model IDEALX: an LTspice ideal diode (Ron, Roff, Vfwd): Xyce has no ideal diode and simulates a plain diode'
+check "vacask: ideal diode"   "$bin" --check "$work/ltideal.edn" --sim vacask 'model IDEALX: an LTspice ideal diode (Ron, Roff, Vfwd): VACASK has no ideal diode and simulates a plain diode'
+check "vacask: B source"      "$bin" --check "$work/ltup.edn" --sim vacask 'spicy cannot translate behavioural (B) sources for VACASK'
+if "$bin" --check "$work/ltideal.edn" 2>&1 | grep -q "ideal diode"; then fail "ngspice: no ideal-diode warning"; else pass "ngspice: no ideal-diode warning"; fi
+# VACASK: what a device does not have is left out (mfg=, LTspice's ratings), as ngspice leaves
+# it out; VACASK stopped at it ("Parameter 'vds' not found")
+ltsch "$work/ltvk.edn" 'V1 a 0 10\nV2 g 0 8\nM1 a g b IRFX\nQ1 a g e QX\nR2 e 0 1k\n.model IRFX VDMOS(Vto=4 Kp=6 mfg=Vishay Vds=100 Ron=160m Qg=26n)\n.model QX NPN(Is=1e-14 Bf=200 Vceo=40 Icrating=200m mfg=NXP)\n.op'
+check "vacask: VDMOS ratings left out" "$bin" --netlist "$work/ltvk.edn" --sim vacask "// IRFX: mfg, vds, ron, qg left out (not parameters of VACASK's sp_vdmos)"
+check "vacask: VDMOS kept"     "$bin" --netlist "$work/ltvk.edn" --sim vacask "model irfx sp_vdmos type=1 vto=4 kp=6"
+check "vacask: BJT ratings left out" "$bin" --netlist "$work/ltvk.edn" --sim vacask "// QX: vceo, icrating, mfg left out (not parameters of VACASK's sp_bjt)"
 "$bin" --import-model "$work/faulty.lib" >/dev/null 2>&1; [ $? = 1 ] && pass "import stops on faults" || fail "import stops on faults"
 check "import says how"      "$bin" --import-model "$work/faulty.lib" "import it again with --repair"
 check "import --repair"      "$bin" --import-model "$work/faulty.lib" --repair "repaired"
@@ -519,6 +591,13 @@ EOF
 		check "pspice mode ($name)"    "$bin" --netlist "$work/psw.edn" "ngbehavior=psa"
 		check "pspice model run ($name)" "$bin" --text --run "$work/psw.edn" "999 mV"
 	done
+	# LTspice models in ngspice's LTspice mode. The ideal diode: 2 V less Vfwd = 0.5 V through
+	# Ron = 1 ohm into 1k is 1.499 V (a plain diode gave 1.34 V); mfg= stopped ngspice
+	check "lt ideal diode run"   "$bin" --text --run "$work/ltideal.edn" "v(b)                         1.499 V"
+	check "lt mfg= run"          "$bin" --text --run "$work/ltmfg.edn" "Operating Point"
+	check "lt uplim() run"       "$bin" --text --run "$work/ltup.edn" "v(b)                         1 V"
+	check "ltpsa run"            "$bin" --text --run "$work/ltboth.edn" "v(c)                         1 V"
+	check "pspice if() run"      "$bin" --text --run "$work/ltif.edn" "v(b)                         250 mV"
 	check "no pspice mode"     "$bin" --netlist "$work/switch.edn" "* spicy"
 	if "$bin" --netlist "$work/switch.edn" 2>&1 | grep -q ngbehavior; then fail "plain netlist without pspice mode"; else pass "plain netlist without pspice mode"; fi
 	"$bin" --text --run "$work/opamp_inverting.edn" --csv "$work/o.csv" >/dev/null 2>&1
@@ -537,6 +616,9 @@ if command -v vacask >/dev/null 2>&1; then
 	# a step that fails must not show the results of the step before (the same file names)
 	if "$bin" --text --run "$work/badstep.edn" --sim vacask 2>&1 | grep -qF '[rv=1k*]" ('; then fail "vacask failed step, no stale"; else pass "vacask failed step, no stale"; fi
 	check "vacask step without results" "$bin" --text --run "$work/badstep.edn" --sim vacask "[rv=1k*]: no results"
+	# as ngspice: the source follower's v(b) = 4.081 V, the emitter follower's v(e) = 7.294 V
+	check "vacask VDMOS run"     "$bin" --text --run "$work/ltvk.edn" --sim vacask "  b                            4.081 V"
+	check "vacask BJT run"       "$bin" --text --run "$work/ltvk.edn" --sim vacask "  e                            7.294 V"
 else
 	echo "skip VACASK runs (vacask is not on the PATH)"
 fi

@@ -43,16 +43,25 @@ netlist_build :: proc(s: ^Schematic, sim: ^Simulator_Def, title: string, base_di
 	} else {
 		nl.text = netlist_spice(&nl, s, sim, title)
 		if sim_is_xyce(sim) do nl.text = xyce_fixups(nl.text)
+		cards := netlist_cards_deep(nl.text, base_dir)
 		if sim_is_ngspice(sim) {
-			if why := pspice_feature(nl.text, base_dir); len(why) > 0 {
-				// "psa": PSpice syntax in the whole netlist ("ps" alone only covers .include'd
-				// files, and spicy writes the models into the netlist)
-				nl.ngbehavior = "psa"
+			// its compatibility modes for the whole netlist ("a": "ps" or "lt" alone only covers
+			// .include'd files, and spicy writes the models into the netlist): "psa" for PSpice
+			// models, "lta" for LTspice's, "ltpsa" for both
+			ps := pspice_feature(nl.text, base_dir)
+			if len(ps) == 0 do ps = pspice_func_feature(cards)
+			lt := ltspice_feature(cards)
+			if len(ps) > 0 || len(lt) > 0 {
+				nl.ngbehavior = tcat("lt" if len(lt) > 0 else "", "ps" if len(ps) > 0 else "", "a")
+				why := ""
+				if len(ps) > 0 do why = tcat("PSpice models (", ps, ")")
+				if len(lt) > 0 do why = tcat(why, " and " if len(why) > 0 else "", "LTspice models (", lt, ")")
 				nl_ := strings.index_byte(nl.text, '\n')
-				note := fmt.tprintf("* PSpice models (%s): spicy runs ngspice -D ngbehavior=psa\n", why)
+				note := fmt.tprintf("* %s: spicy runs ngspice -D ngbehavior=%s\n", why, nl.ngbehavior)
 				nl.text = tcat(nl.text[:nl_ + 1], note, nl.text[nl_ + 1:]) if nl_ >= 0 else tcat(note, nl.text)
 			}
 		}
+		lt_check_netlist(&nl, cards, sim)
 	}
 	check_models(&nl, s, sim)
 	if len(s.comps) == 0 do append(&nl.errors, "the schematic has no parts")
