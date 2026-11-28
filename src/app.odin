@@ -121,6 +121,7 @@ doc_new :: proc() -> ^Doc {
 	wave_init(&d.wave)
 	append(&app.docs, d)
 	app.cur = len(app.docs) - 1
+	symed.shown = false
 	return d
 }
 
@@ -215,6 +216,7 @@ open_file :: proc(path: string) -> bool {
 	p := abs_path(path)
 	for d, i in app.docs do if d.path == p {
 		app.cur = i
+		symed.shown = false
 		return true
 	}
 	sch, warnings, err := load_schematic_file(p)
@@ -303,6 +305,7 @@ request_close :: proc(i: int) {
 	d := app.docs[i]
 	if d.dirty && S.confirm_close {
 		app.cur = i
+		symed.shown = false
 		dialog_open(.Confirm_Close)
 		return
 	}
@@ -363,9 +366,13 @@ sim_run :: proc(d: ^Doc) {
 on_run_done :: proc(d: ^Doc) {
 	r := &d.run
 	if r.state == .Failed {
-		msg := r.message
-		if len(r.log_text) > 0 && !strings.contains(msg, "stopped") do msg = tcat(msg, "\n\nView › Simulator log shows the whole output.")
-		message(tcat(r.sim_name, " failed"), msg)
+		// the simulator's log straight away, spicy's summary of the error above it (a run
+		// stopped by hand, or one that never started, has no log to show)
+		if len(r.log_text) > 0 && !strings.contains(r.message, "stopped") {
+			show_text(tcat(r.sim_name, " failed – log"), tcat(r.message, "\n\n----- ", r.sim_name, " log -----\n\n", r.log_text))
+			return
+		}
+		message(tcat(r.sim_name, " failed"), r.message)
 		return
 	}
 	// first: the .plot and .meas directives may add warnings
@@ -408,8 +415,10 @@ run_action :: proc(name: string) {
 		dialog_open(.Export_Netlist)
 	case "file/next-tab":
 		if len(app.docs) > 0 do app.cur = (app.cur + 1) % len(app.docs)
+		symed.shown = false
 	case "file/prev-tab":
 		if len(app.docs) > 0 do app.cur = (app.cur + len(app.docs) - 1) % len(app.docs)
+		symed.shown = false
 	case "file/quit":
 		request_quit()
 	case "edit/undo":
@@ -636,7 +645,7 @@ app_on_settings_changed :: proc() {
 
 handle_keys :: proc() {
 	if ui.modal || ui.popup_id != 0 do return
-	if symed.active && cur_popout == nil do return // the symbol editor has keys of its own
+	if symed.active && symed.shown && cur_popout == nil do return // the symbol editor has keys of its own
 	for &a in actions {
 		if a.ctx != .Global && a.ctx != app.hover_ctx do continue
 		for c in a.keys {
@@ -941,7 +950,7 @@ draw_tabs :: proc(r: Rect) {
 		xs := max(fs() + 4, 18) // the close box, as big as the text
 		w := min(text_w(title) + xs + 26 * ui_scale, 260 * ui_scale)
 		tr := Rect{x, r.y + 3, w, r.h - 3}
-		sel := i == app.cur
+		sel := i == app.cur && !(symed.active && symed.shown)
 		h := hover(tr)
 		if sel do fill_round(tr, th.bg, 5)
 		else if h do fill_round(tr, th.hover, 5)
@@ -951,12 +960,40 @@ draw_tabs :: proc(r: Rect) {
 			request_close(i)
 			return
 		}
-		if h && ui.pressed[0] && !r_contains(xr, ui.mouse) do app.cur = i
+		if h && ui.pressed[0] && !r_contains(xr, ui.mouse) {
+			app.cur = i
+			if symed.active && symed.shown do log.infof("tab: %s (the symbol editor stays open in its tab)", title)
+			symed.shown = false
+		}
 		if h && ui.pressed[2] {
 			request_close(i)
 			return
 		}
 		if h do tooltip(id_of(tcat("tab", itoa(d.id))), d.path if len(d.path) > 0 else "not saved yet")
+		x += w + 2
+	}
+	// the symbol editor's tab, after the schematics'
+	if symed.active {
+		title := tcat("Symbol: ", symed.sym.name, " •" if symed.dirty else "")
+		xs := max(fs() + 4, 18)
+		w := min(text_w(title) + xs + 26 * ui_scale, 260 * ui_scale)
+		tr := Rect{x, r.y + 3, w, r.h - 3}
+		sel := symed.shown
+		h := hover(tr)
+		if sel do fill_round(tr, th.bg, 5)
+		else if h do fill_round(tr, th.hover, 5)
+		text_in({tr.x, tr.y, tr.w - xs - 4, tr.h}, fit_text(title, tr.w - xs - 16 * ui_scale), th.fg if sel else th.muted, 0, 0, 10 * ui_scale)
+		xr := Rect{tr.x + tr.w - xs - 4, tr.y + (tr.h - xs) / 2, xs, xs}
+		if tool_button("tab.x.symed", xr, "×") {
+			symed_request_close()
+			return
+		}
+		if h && ui.pressed[0] && !r_contains(xr, ui.mouse) do symed.shown = true
+		if h && ui.pressed[2] {
+			symed_request_close()
+			return
+		}
+		if h do tooltip(id_of("tab.symed"), tcat("Symbol editor: ", symed.file))
 		x += w + 2
 	}
 	if tool_button("tab.new", {x + 2, r.y + 3, r.h - 3, r.h - 3}, "+", true, false, "New schematic") do run_action("file/new")
@@ -1005,7 +1042,7 @@ draw_statusbar :: proc(r: Rect) {
 
 // Split the main area between the schematic and the waveforms.
 draw_main :: proc(r: Rect) {
-	if symed.active {
+	if symed.active && symed.shown {
 		symed_draw(r)
 		return
 	}

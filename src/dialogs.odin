@@ -1,6 +1,7 @@
 package spicy
 
 import "core:fmt"
+import "core:log"
 import "core:math"
 import "core:strings"
 import rl "vendor:raylib"
@@ -108,6 +109,7 @@ message :: proc(title, text: string) {
 }
 
 show_text :: proc(title, text: string) {
+	log.infof("shown: %s", title)
 	set_str(&app.dlg.title, title)
 	set_str(&app.dlg.text, text)
 	dialog_open(.Text_View)

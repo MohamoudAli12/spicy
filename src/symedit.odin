@@ -2,6 +2,7 @@ package spicy
 
 import "base:runtime"
 import "core:fmt"
+import "core:log"
 import "core:math"
 import "core:mem/virtual"
 import "core:strings"
@@ -80,12 +81,16 @@ Symed :: struct {
 	dirty:      bool,
 	label_pins: bool, // the Pin tool also writes the pin's name beside it
 	template:   int,
+	shown:      bool, // its tab is the current one (the schematic tabs stay beside it)
 	confirm:    string, // an action waiting for a second click ("close", "replace")
 	msg:        string,
 	msg_err:    bool,
 }
 
 symed: Symed
+
+// The search of "Start from" (outside the editor's arena: the text field replaces it).
+symed_tsearch: string
 
 @(private = "file")
 alloc :: proc() -> runtime.Allocator {return virtual.arena_allocator(&symed.arena)}
@@ -202,6 +207,7 @@ symed_open :: proc(src: ^Symbol, d: ^Doc = nil, ci := -1) {
 		return
 	}
 	symed.active = true
+	symed.shown = true
 	symed.for_doc, symed.for_comp = -1, -1
 	symed.zoom = 4
 	symed.label_pins = true
@@ -261,7 +267,21 @@ symed_open :: proc(src: ^Symbol, d: ^Doc = nil, ci := -1) {
 		}
 	}
 	symed.dirty = src == nil
+	log.infof("symbol editor: opened in a tab (%s)", symed.sym.name)
 	status("symbol editor: draw with the tools above, Save when done (Esc: select tool)")
+}
+
+// Close (its button or its tab's): with unsaved changes the editor is shown and asks first
+// (its Close button becomes "Discard changes"). true when it closed.
+symed_request_close :: proc() -> bool {
+	if symed.dirty && symed.confirm != "close" {
+		symed.shown = true
+		symed.confirm = "close"
+		set_msg("unsaved changes: click Discard changes to close without saving", true)
+		return false
+	}
+	symed_close()
+	return true
 }
 
 symed_close :: proc() {
@@ -564,13 +584,7 @@ draw_toolbar_row :: proc(r: Rect) {
 	closing := symed.confirm == "close"
 	cl_label := "Discard changes" if closing else "Close"
 	if tool_button("symed.close", r_inset(cut_right(&r, text_w(cl_label) + 24), 3), cl_label, true, false, "", th.err if closing else {}) {
-		if symed.dirty && !closing {
-			symed.confirm = "close"
-			set_msg("unsaved changes: click Discard changes to close without saving", true)
-		} else {
-			symed_close()
-			return
-		}
+		if symed_request_close() do return
 	}
 	if tool_button("symed.save", r_inset(cut_right(&r, text_w("Save") + 24), 3), "Save", true, false, "Ctrl+S", th.accent) do save()
 	title := tcat("Symbol editor – ", symed.sym.name, " •" if symed.dirty else "", "   ", base_name(symed.file))
@@ -1000,17 +1014,30 @@ draw_panel :: proc(r: Rect) {
 	} else {
 		afield("symed.spice", prow(&b, "Netlist line"), &symed.sym.spice)
 	}
-	// starting from another symbol
+	// starting from another symbol: searched (there are thousands), then picked from the matches
+	sr := prow(&b, "Start from")
+	if live_field("symed.tsearch", sr, &symed_tsearch, "search: name, description, category …") do symed.template = 0
+	words := strings.fields(lower(symed_tsearch), context.temp_allocator)
 	all := make([dynamic]string, context.temp_allocator)
 	syms := make([dynamic]^Symbol, context.temp_allocator)
-	for s in symbols_by_category() do if s.kind == .Part {
-		append(&all, tcat(s.category, " – ", s.desc))
+	total := 0
+	match: for s in symbols_by_category() do if s.kind == .Part {
+		total += 1
+		hay := lower(tcat(s.name, " ", s.desc, " ", s.category))
+		for w in words do if !strings.contains(hay, w) do continue match
+		append(&all, tcat(s.category, " – ", s.desc, "  (", s.name, ")"))
 		append(&syms, s)
 	}
-	rr := prow(&b, "Start from")
+	if symed.template >= len(syms) do symed.template = 0 if len(syms) > 0 else -1
+	rr := prow(&b, "")
 	ub := cut_right(&rr, text_w("Use") + 24)
 	cut_right(&rr, 6)
-	combo("symed.template", rr, all[:], &symed.template)
+	if len(syms) == 0 {
+		text_in(rr, "No symbol matches the search.", th.muted, 0, fs(0.9), 4)
+	} else {
+		combo("symed.template", rr, all[:], &symed.template)
+		if hover(rr) && len(words) > 0 do tooltip(id_of("symed.template.n"), fmt.tprintf("%d of %d symbols match", len(syms), total))
+	}
 	if button("symed.use", ub, "Use", symed.template >= 0 && symed.template < len(syms)) do use_template(syms[symed.template])
 	// the model's ports
 	if len(symed.model) > 0 {
@@ -1131,6 +1158,7 @@ rename_pin :: proc(k: int, old, nn: string) {
 // pins whose names match.
 @(private = "file")
 use_template :: proc(t: ^Symbol) {
+	log.infof("symbol editor: started from %s", t.name)
 	push_undo()
 	clear(&symed.gfx)
 	clear(&symed.pins)

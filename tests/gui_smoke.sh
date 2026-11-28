@@ -131,6 +131,35 @@ if ! grep -q "the model table (Diodes: pick a model to place) in the parts windo
 	grep -i "model table\|parts" "$work/cfgp/state/spicy.log" | tail -5
 	exit 1
 fi
+# a run that fails in the simulator: its log shown straight away (it was a message pointing to
+# View › Simulator log)
+if command -v ngspice >/dev/null 2>&1; then
+	printf '* fails in ngspice\nV1 a 0 1\nR1 a b 1k\nD1 b 0 DX\n.model DX D(Is=1e-14 n=)\n.tran 1u 10u\n.end\n' >"$work/fail.cir"
+	run failed "sim/run" "$work/fail.cir"
+	shots="$shots failed"
+	if ! grep -q "shown: ngspice failed – log" "$work/cfg/state/spicy.log"; then
+		echo "FAIL: a failed ngspice run did not show its log"
+		grep -i "shown\|fail" "$work/cfg/state/spicy.log" | tail -5
+		exit 1
+	fi
+fi
+# the symbol editor in a tab of its own: the schematic's tab clicked shows the schematic again,
+# the editor staying open
+run symtab "symbol/new;click:0.039,0.082"
+shots="$shots symtab"
+if ! grep -q "tab: rc_lowpass.edn (the symbol editor stays open in its tab)" "$work/cfg/state/spicy.log"; then
+	echo "FAIL: the symbol editor is not in a tab of its own beside the schematic's"
+	grep -i "symbol editor\|tab:" "$work/cfg/state/spicy.log" | tail -5
+	exit 1
+fi
+# its Start from searched (there are thousands of symbols): "opamp" typed, Use starts from the op-amp
+run symsearch "symbol/new;click:0.9,0.409;type:opamp;click:0.976,0.444"
+shots="$shots symsearch"
+if ! grep -q "symbol editor: started from opamp" "$work/cfg/state/spicy.log"; then
+	echo "FAIL: \"opamp\" typed in the symbol editor's Start from search, then Use: not started from the op-amp"
+	grep -i "symbol editor" "$work/cfg/state/spicy.log" | tail -5
+	exit 1
+fi
 # menu items picked as a click picks them: an action, a submenu item (saved in settings.edn)
 run menus "menu:View/Move the waveforms;menu:View/UI scale/150 %"
 shots="$shots menus"
