@@ -230,6 +230,7 @@ netlist_import :: proc(text: string) -> (s: Schematic, warnings: [dynamic]string
 		}
 		pos := P{snap(x + 48 - sym.lo.x), snap(y + 48 - sym.lo.y)}
 		c := Comp{sym = strings.clone(sym.name), ref = strings.clone(p.ref), value = strings.clone(p.value), pos = pos, attrs = make([dynamic]Attr)}
+		lt_instance_params(&c, &warnings) // an LTspice netlist's Rser= Lser= …: the part's ESR, ESL …
 		append(&s.comps, c)
 		cx, cy := (sym.lo.x + sym.hi.x) / 2, (sym.lo.y + sym.hi.y) / 2
 		for pin, k in sym.pins {

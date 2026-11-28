@@ -462,6 +462,23 @@ equivalent the error gives it: `buf(x)` is `x>0.5 ? 1 : 0`, `inv(x)` is `x>0.5 ?
 `spicy --check-model <file>` and the import report list the ideal diodes, VDMOS models and
 LTspice functions of a library under "To check yourself".
 
+LTspice's instance parameters of a part (its `SpiceLine`: `10u Rser=5m Lser=1n`) are read by no
+other simulator. An imported `.asc` file or SPICE netlist gives them to the part's non-ideal
+values (in the part's dialog), which spicy writes as elements around the part:
+
+| LTspice | Capacitor | Inductor | Voltage source | Resistor |
+|---|---|---|---|---|
+| `Rser` | ESR | DC resistance | Internal resistance | |
+| `Lser` | ESL | | | |
+| `Rpar` | Leakage resistance | Core loss resistance | | |
+| `Cpar` | left out (warning) | Winding capacitance | left out (warning) | |
+| `RLshunt` | left out (warning) | | | |
+| `V`, `Ipk`, `pwr` | Voltage rating | Current rating (`Ipk`) | | Power rating (`pwr`), `tol` its tolerance |
+| `mfg`, `pn`, `type`, `Irms` | kept with the part, not simulated | | | |
+
+LTspice puts a capacitor's `Rpar` across the whole part; spicy's leakage resistance is across the
+capacitance alone, a difference of `Rser`/`Rpar`. A parameter set to 0 is left out (ideal).
+
 ---
 
 ## 7 Examples

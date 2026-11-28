@@ -130,6 +130,8 @@ asc_import :: proc(data: []u8) -> (s: Schematic, warnings: [dynamic]string, err:
 	for &c in s.comps {
 		sym := symbol_find(c.sym)
 		if len(c.ref) == 0 do c.ref = strings.clone(next_ref(&s, sym.prefix))
+		// LTspice's Rser= Lser= … of the SpiceLine: the part's ESR, ESL …
+		lt_instance_params(&c, &warnings)
 		if len(c.value) == 0 do c.value = strings.clone(sym.value)
 	}
 	// in name order: the same file always gives the same warnings

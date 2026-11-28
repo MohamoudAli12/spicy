@@ -301,3 +301,100 @@ lt_diode_warn :: proc(nl: ^Netlist, card, sim_name: string) {
 	name, _, _, _, _ := model_card(card)
 	add_unique(&nl.warnings, lt_ideal_diode_message(name, p, sim_name))
 }
+
+// LTspice's instance parameters of R, C, L and V parts (from a SpiceLine: "10u Rser=5m
+// Lser=1n"), which no simulator here reads, as spicy's non-ideal values of the part (its
+// ESR, ESL, … which every simulator runs). LTspice's equivalent circuits (its help, "C.
+// Capacitor" …): a capacitor is Rser, C and Lser in series, Rpar and Cpar across the whole;
+// an inductor Rser and L in series, Rpar and Cpar across the whole; a voltage source Rser in
+// series, Cpar across. spicy's leakage resistance is across the capacitance alone, not with
+// the ESR and ESL: a difference of Rser / Rpar (1e-9 for 1 mOhm and 1 MOhm).
+Lt_Inst_Param :: struct {
+	prefix:  u8, // the part's (spicy symbol's) prefix
+	lt, key: string, // LTspice's name (lower case), spicy's
+}
+
+@(private = "file")
+LT_INST_PARAMS := []Lt_Inst_Param {
+	{'C', "rser", "esr"}, {'C', "lser", "esl"}, {'C', "rpar", "rleak"}, {'C', "v", "vmax"},
+	{'L', "rser", "dcr"}, {'L', "rpar", "rpar"}, {'L', "cpar", "cpar"}, {'L', "ipk", "imax"},
+	{'V', "rser", "rser"},
+	{'R', "pwr", "pmax"}, {'R', "tol", "tol"},
+}
+
+// LTspice's part data that is not simulated: kept with the part as it is.
+@(private = "file")
+LT_INST_NOTES := []string{"mfg", "pn", "type", "irms"}
+
+// LTspice parameters spicy has no element for: left out, with a warning.
+@(private = "file")
+LT_INST_MISSING := []Lt_Inst_Param {
+	{'C', "cpar", "capacitance across a capacitor"},
+	{'C', "rlshunt", "resistance across a capacitor's ESL"},
+	{'V', "cpar", "capacitance across a voltage source"},
+}
+
+// The words of a part's value: spaces inside "…" and (…) do not split.
+@(private = "file")
+value_words :: proc(v: string) -> []string {
+	out := make([dynamic]string, context.temp_allocator)
+	depth, quoted, start := 0, false, -1
+	for i := 0; i <= len(v); i += 1 {
+		ch: u8 = ' ' if i == len(v) else v[i]
+		if quoted {
+			if ch == '"' do quoted = false
+			continue
+		}
+		switch ch {
+		case '"': quoted = true
+		case '(': depth += 1
+		case ')': depth = max(depth - 1, 0)
+		case ' ', '\t':
+			if depth == 0 {
+				if start >= 0 do append(&out, v[start:i])
+				start = -1
+				continue
+			}
+		}
+		if start < 0 do start = i
+	}
+	return out[:]
+}
+
+// Moves LTspice's instance parameters out of the part's value into its non-ideal values
+// (and its notes); a warning for each one spicy cannot simulate. Parts with no non-ideal
+// values (subcircuits, diodes …) are left as they are.
+lt_instance_params :: proc(c: ^Comp, warnings: ^[dynamic]string) {
+	sym := symbol_find(c.sym)
+	if len(nonideal_params(sym)) == 0 do return
+	prefix := upper(sym.prefix)[0]
+	kept := make([dynamic]string, context.temp_allocator)
+	changed := false
+	words: for w in value_words(c.value) {
+		eq := strings.index_byte(w, '=')
+		if eq <= 0 {
+			append(&kept, w)
+			continue
+		}
+		name := lower(strings.trim_space(w[:eq]))
+		val := strings.trim(strings.trim_space(w[eq + 1:]), "\"")
+		for p in LT_INST_MISSING do if p.prefix == prefix && p.lt == name {
+			if x, ok := parse_eng(val); !ok || x != 0 {
+				append(warnings, fmt.tprintf("%s: LTspice's %s left out (spicy has no %s)", c.ref, w, p.key))
+			}
+			changed = true
+			continue words
+		}
+		key, note := "", false
+		for p in LT_INST_PARAMS do if p.prefix == prefix && p.lt == name do key = p.key
+		for n in LT_INST_NOTES do if n == name do key, note = n, true
+		if len(key) == 0 {
+			append(&kept, w)
+			continue
+		}
+		changed = true
+		if x, ok := parse_eng(val); ok && x == 0 && !note do continue // 0: ideal, as when unset
+		comp_set_attr(c, key, val)
+	}
+	if changed do set_str(&c.value, strings.join(kept[:], " ", context.temp_allocator))
+}

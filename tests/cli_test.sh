@@ -79,6 +79,55 @@ TEXT 0 300 Left 2 !.op
 EOF
 check "asc import"           "$bin" --import-asc "$work/imp.asc" "$work/imp.edn" ""
 check "asc import result"    cat "$work/imp.edn" ":symbol \"res\""
+# LTspice's Rser= Lser= Rpar= Cpar= of a SpiceLine: the part's ESR, ESL … (no simulator reads
+# them); its data (mfg= pn= …) kept; what spicy has no element for left out, with a warning
+cat >"$work/rser.asc" <<'EOF'
+Version 4
+SHEET 1 880 680
+FLAG 0 96 0
+FLAG 0 16 out
+FLAG 80 16 out
+FLAG 80 96 mid
+FLAG 80 112 mid
+FLAG 80 192 0
+FLAG 160 16 out
+FLAG 160 80 0
+SYMBOL voltage 0 0 R0
+SYMATTR InstName V1
+SYMATTR Value 5
+SYMATTR SpiceLine Rser=1k
+SYMBOL ind2 64 0 R0
+SYMATTR InstName L1
+SYMATTR Value 10u
+SYMATTR SpiceLine Ipk=12.5 Rser=1k Rpar=8040 Cpar=5.208p mfg="Wurth Elektronik" pn="7447709100"
+SYMBOL res 64 96 R0
+SYMATTR InstName R1
+SYMATTR Value 1k
+SYMBOL cap 144 16 R0
+SYMATTR InstName C1
+SYMATTR Value 10u
+SYMATTR SpiceLine V=25 Irms=1.12 Rser=0.2 Lser=2n Rpar=1Meg Cpar=0 mfg="Vishay" pn="595D107M025R" type="Tantalum Conf Coat"
+TEXT 0 300 Left 2 !.op
+EOF
+check "asc Rser: source"       "$bin" --netlist "$work/rser.asc" "RV1_rser out n_v1_1 1k"
+check "asc Rser: inductor"     "$bin" --netlist "$work/rser.asc" "RL1_dcr n_l1_s n_l1_1 1k"
+check "asc Rpar: inductor"     "$bin" --netlist "$work/rser.asc" "RL1_rpar n_l1_s mid 8040"
+check "asc Cpar: inductor"     "$bin" --netlist "$work/rser.asc" "CL1_cpar n_l1_s mid 5.208p"
+check "asc Rser: capacitor"    "$bin" --netlist "$work/rser.asc" "RC1_esr n_c1_s n_c1_1 0.2"
+check "asc Lser: capacitor"    "$bin" --netlist "$work/rser.asc" "LC1_esl n_c1_1 n_c1_2 2n"
+check "asc Rpar: capacitor"    "$bin" --netlist "$work/rser.asc" "RC1_rleak n_c1_2 0 1Meg"
+check "asc Rser: vacask"       "$bin" --netlist "$work/rser.asc" --sim vacask "rc1_esr (c1_a n_c1_1) spicy_r r=0.2"
+if "$bin" --netlist "$work/rser.asc" 2>&1 | grep -qiE "rser=|lser=|rpar=|cpar=|ipk=|mfg="; then fail "asc: no LTspice parameters in the netlist"; else pass "asc: no LTspice parameters in the netlist"; fi
+check "asc Rser imported"      "$bin" --import-asc "$work/rser.asc" "$work/rser.edn" ""
+check "asc Rser: values"       cat "$work/rser.edn" ':value "10u" :at [144 16] :attrs {"vmax" "25" "irms" "1.12" "esr" "0.2" "esl" "2n" "rleak" "1Meg" "mfg" "Vishay"'
+check "asc Ipk: rating"        cat "$work/rser.edn" '"imax" "12.5" "dcr" "1k"'
+sed 's/Cpar=0 mfg/Cpar=1p RLshunt=10 mfg/' "$work/rser.asc" >"$work/rser2.asc"
+check "asc Cpar: capacitor"    "$bin" --import-asc "$work/rser2.asc" "$work/rser2.edn" "C1: LTspice's Cpar=1p left out (spicy has no capacitance across a capacitor)"
+check "asc RLshunt"            "$bin" --import-asc "$work/rser2.asc" "$work/rser2.edn" "C1: LTspice's RLshunt=10 left out"
+if "$bin" --import-asc "$work/rser.asc" "$work/rser.edn" 2>&1 | grep -q "left out"; then fail "asc Cpar=0: no warning"; else pass "asc Cpar=0: no warning"; fi
+printf '* LTspice netlist\nV1 out 0 5 Rser=1k\nR1 out 0 1k\nC1 out 0 1u Rser=10m Lser=1n\n.op\n.end\n' >"$work/rser.cir"
+check "netlist Rser: source"   "$bin" --netlist "$work/rser.cir" "RV1_rser out n_v1_1 1k"
+check "netlist Lser: capacitor" "$bin" --netlist "$work/rser.cir" "LC1_esl n_c1_1 n_c1_2 1n"
 
 # a simulator's program set like Simulate › Simulators… does: only that path changes
 mkdir -p "$work/pcfg"
@@ -598,6 +647,9 @@ EOF
 	check "lt uplim() run"       "$bin" --text --run "$work/ltup.edn" "v(b)                         1 V"
 	check "ltpsa run"            "$bin" --text --run "$work/ltboth.edn" "v(c)                         1 V"
 	check "pspice if() run"      "$bin" --text --run "$work/ltif.edn" "v(b)                         250 mV"
+	# LTspice's Rser= etc.: 5 V through 1k into (1k || 8040 + 1k) || 1 MOhm: 3.267 V, 1.729 V
+	check "asc Rser run"         "$bin" --text --run "$work/rser.asc" "v(out)                       3.267 V"
+	check "asc Rser run (mid)"   "$bin" --text --run "$work/rser.asc" "v(mid)                       1.729 V"
 	check "no pspice mode"     "$bin" --netlist "$work/switch.edn" "* spicy"
 	if "$bin" --netlist "$work/switch.edn" 2>&1 | grep -q ngbehavior; then fail "plain netlist without pspice mode"; else pass "plain netlist without pspice mode"; fi
 	"$bin" --text --run "$work/opamp_inverting.edn" --csv "$work/o.csv" >/dev/null 2>&1
@@ -609,6 +661,7 @@ fi
 if command -v Xyce >/dev/null 2>&1; then
 	check "xyce device current" "$bin" --text --run "$work/rc_lowpass.edn" --sim xyce "I(R1)"
 	check "xyce step currents" "$bin" --text --run "$work/step.edn" --sim xyce "I(R1)"
+	check "xyce asc Rser run"   "$bin" --text --run "$work/rser.asc" --sim xyce "  OUT                          3.267 V"
 else
 	echo "skip Xyce runs (Xyce is not on the PATH)"
 fi
@@ -619,6 +672,7 @@ if command -v vacask >/dev/null 2>&1; then
 	# as ngspice: the source follower's v(b) = 4.081 V, the emitter follower's v(e) = 7.294 V
 	check "vacask VDMOS run"     "$bin" --text --run "$work/ltvk.edn" --sim vacask "  b                            4.081 V"
 	check "vacask BJT run"       "$bin" --text --run "$work/ltvk.edn" --sim vacask "  e                            7.294 V"
+	check "vacask asc Rser run"  "$bin" --text --run "$work/rser.asc" --sim vacask "  out                          3.267 V"
 else
 	echo "skip VACASK runs (vacask is not on the PATH)"
 fi
